@@ -4,9 +4,10 @@
 //! talks to the GUI through a command channel and a shared state mutex.
 
 use std::collections::VecDeque;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -17,6 +18,36 @@ use omen_wmi::{
 };
 
 pub const APP_TITLE: &str = "OMEN Hub RS";
+
+fn log_path() -> Option<PathBuf> {
+    let base = std::env::var("APPDATA").ok()?;
+    Some(PathBuf::from(base).join("omen-rs").join("omen-hub.log"))
+}
+
+fn log_line(msg: &str) {
+    if let Some(path) = log_path() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{ts}] {msg}");
+        }
+    }
+}
+
+/// Locks the shared state, recovering from a poisoned mutex instead of
+/// panicking (a worker panic must not take the whole GUI down).
+fn lock<'a>(state: &'a Arc<Mutex<UiState>>) -> MutexGuard<'a, UiState> {
+    state.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 // ---------------------------------------------------------------------------
 // Commands / shared state
@@ -53,6 +84,8 @@ pub struct UiState {
     pub status: String,
     pub connect_error: Option<String>,
     pub elevated: bool,
+    pub connected: bool,
+    pub last_sample_at: Option<Instant>,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -91,43 +124,85 @@ fn save_config(cfg: &Config) {
 
 fn spawn_worker(rx_cmd: Receiver<Cmd>, state: Arc<Mutex<UiState>>) {
     std::thread::spawn(move || {
+        log_line("worker: starting");
+        let start = Instant::now();
+
         let client = match BiosClient::connect() {
-            Ok(c) => c,
+            Ok(c) => {
+                log_line("worker: connected");
+                c
+            }
             Err(e) => {
-                state.lock().unwrap().connect_error =
+                log_line(&format!("worker: connect failed: {e}"));
+                lock(&state).connect_error =
                     Some(format!("Connexion WMI impossible ({e}). Lance l'app en administrateur."));
                 return;
             }
         };
 
-        // Initial reads
-        {
-            let mut st = state.lock().unwrap();
-            if let Ok((_, system)) = client.get_system() {
-                st.snapshot.system = Some(system);
-            }
-            if let Ok((_, gpu)) = client.get_gpu_power() {
-                st.snapshot.gpu_power = Some(gpu);
-            }
-            if let Ok((_, mode)) = client.get_gpu_mode() {
-                st.gpu_mode = Some(mode);
-            }
-            if let Ok((_, kbd)) = client.get_kbd_type() {
-                st.kbd_type = Some(kbd);
-            }
-            if let Ok((_, bl)) = client.get_backlight() {
-                st.backlight = Some(bl);
-            }
-            if let Ok((_, ct)) = client.get_color_table() {
-                st.color_table = Some(ct);
-            }
-            if let Ok((_, ft)) = client.get_fan_table() {
-                st.fan_table = Some(ft);
-            }
-        }
+        // Initial reads: collect first, then store. The shared mutex is never
+        // held across a WMI call, so a slow or stuck call can never freeze the UI.
+        let system = client
+            .get_system()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
+        let gpu = client
+            .get_gpu_power()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
+        let gpu_mode = client
+            .get_gpu_mode()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
+        let kbd = client
+            .get_kbd_type()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
+        let backlight = client
+            .get_backlight()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
+        let color = client
+            .get_color_table()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
+        let table = client
+            .get_fan_table()
+            .ok()
+            .and_then(|(c, v)| (c == 0).then_some(v));
 
-        let start = Instant::now();
-        let mut last_sample = Instant::now() - Duration::from_secs(10);
+        {
+            let mut st = lock(&state);
+            if let Some(v) = system {
+                st.snapshot.system = Some(v);
+            }
+            if let Some(v) = gpu {
+                st.snapshot.gpu_power = Some(v);
+            }
+            if let Some(v) = gpu_mode {
+                st.gpu_mode = Some(v);
+            }
+            if let Some(v) = kbd {
+                st.kbd_type = Some(v);
+            }
+            if let Some(v) = backlight {
+                st.backlight = Some(v);
+            }
+            if let Some(v) = color {
+                st.color_table = Some(v);
+            }
+            if let Some(v) = table {
+                st.fan_table = Some(v);
+            }
+            st.connected = true;
+            st.status = "Connecté".to_string();
+        }
+        log_line("worker: initial reads done");
+
+        sample(&client, &state, start);
+        log_line("worker: first sample done");
+
+        let mut last_sample = Instant::now();
 
         loop {
             match rx_cmd.recv_timeout(Duration::from_millis(400)) {
@@ -146,7 +221,7 @@ fn spawn_worker(rx_cmd: Receiver<Cmd>, state: Arc<Mutex<UiState>>) {
 }
 
 fn set_status(state: &Arc<Mutex<UiState>>, msg: impl Into<String>) {
-    state.lock().unwrap().status = msg.into();
+    lock(state).status = msg.into();
 }
 
 fn check(state: &Arc<Mutex<UiState>>, code: i32, what: &str) -> bool {
@@ -159,35 +234,48 @@ fn check(state: &Arc<Mutex<UiState>>, code: i32, what: &str) -> bool {
 }
 
 fn sample(client: &BiosClient, state: &Arc<Mutex<UiState>>, start: Instant) {
-    let mut st = state.lock().unwrap();
-    if let Ok((code, temp)) = client.get_temperature() {
-        if code == 0 {
-            st.snapshot.temp_c = Some(temp);
-        }
+    // Collect without the lock, then store: never hold the mutex across WMI calls.
+    let temp = client
+        .get_temperature()
+        .ok()
+        .and_then(|(c, v)| (c == 0).then_some(v));
+    let fan = client
+        .get_fan_level()
+        .ok()
+        .and_then(|(c, v)| (c == 0).then_some(v));
+    let max_fan = client
+        .get_max_fan()
+        .ok()
+        .and_then(|(c, v)| (c == 0).then_some(v));
+    let throttling = client
+        .get_throttling()
+        .ok()
+        .and_then(|(c, v)| (c == 0).then(|| format!("{v:?}")));
+    let power = client
+        .get_power_data()
+        .ok()
+        .and_then(|(c, v)| (c == 0).then_some(v));
+
+    let mut st = lock(state);
+    if let Some(v) = temp {
+        st.snapshot.temp_c = Some(v);
     }
-    if let Ok((code, levels)) = client.get_fan_level() {
-        if code == 0 {
-            st.snapshot.fan_cpu = Some(levels.cpu);
-            st.snapshot.fan_gpu = Some(levels.gpu);
-            st.snapshot.fan_cpu_percent = Some(levels.cpu_percent());
-            st.snapshot.fan_gpu_percent = Some(levels.gpu_percent());
-        }
+    if let Some(v) = fan {
+        st.snapshot.fan_cpu = Some(v.cpu);
+        st.snapshot.fan_gpu = Some(v.gpu);
+        st.snapshot.fan_cpu_percent = Some(v.cpu_percent());
+        st.snapshot.fan_gpu_percent = Some(v.gpu_percent());
     }
-    if let Ok((code, max)) = client.get_max_fan() {
-        if code == 0 {
-            st.snapshot.max_fan = Some(max);
-        }
+    if let Some(v) = max_fan {
+        st.snapshot.max_fan = Some(v);
     }
-    if let Ok((code, thr)) = client.get_throttling() {
-        if code == 0 {
-            st.snapshot.throttling = Some(format!("{thr:?}"));
-        }
+    if let Some(v) = throttling {
+        st.snapshot.throttling = Some(v);
     }
-    if let Ok((code, raw)) = client.get_power_data() {
-        if code == 0 {
-            st.snapshot.power_raw = raw;
-        }
+    if let Some(v) = power {
+        st.snapshot.power_raw = v;
     }
+    st.last_sample_at = Some(Instant::now());
 
     let t = start.elapsed().as_secs_f64();
     let temp = st.snapshot.temp_c.unwrap_or(0) as f32;
@@ -201,7 +289,7 @@ fn sample(client: &BiosClient, state: &Arc<Mutex<UiState>>, start: Instant) {
 
 fn apply_curve(client: &BiosClient, state: &Arc<Mutex<UiState>>) {
     let (enabled, curve, temp, max_fan) = {
-        let st = state.lock().unwrap();
+        let st = lock(state);
         (
             st.curve_enabled,
             st.curve.clone(),
@@ -216,7 +304,7 @@ fn apply_curve(client: &BiosClient, state: &Arc<Mutex<UiState>>) {
     let (cpu, gpu) = curve.interpolate(temp);
     if let Ok(code) = client.set_fan_level(cpu, gpu) {
         if code == 0 {
-            let mut st = state.lock().unwrap();
+            let mut st = lock(state);
             st.curve_levels = Some((cpu, gpu));
         }
     }
@@ -228,7 +316,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
             match client.set_max_fan(on) {
                 Ok(code) if check(state, code, "max fan") => {
                     set_status(state, format!("Max fan: {}", if on { "ON" } else { "off" }));
-                    let mut st = state.lock().unwrap();
+                    let mut st = lock(state);
                     st.snapshot.max_fan = Some(on);
                 }
                 Ok(_) => {}
@@ -253,7 +341,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
             Err(e) => set_status(state, format!("fan levels: {e}")),
         },
         Cmd::SetCurve(curve) => {
-            let mut st = state.lock().unwrap();
+            let mut st = lock(state);
             st.curve_enabled = curve.is_some();
             if let Some(c) = curve {
                 st.curve = c;
@@ -280,7 +368,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
             Ok(code) if check(state, code, "gpu power") => {
                 set_status(state, format!("GPU power: {data:?}"));
                 if let Ok((_, gpu)) = client.get_gpu_power() {
-                    state.lock().unwrap().snapshot.gpu_power = Some(gpu);
+                    lock(state).snapshot.gpu_power = Some(gpu);
                 }
             }
             Ok(_) => {}
@@ -290,7 +378,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
             Ok(code) if check(state, code, "backlight") => {
                 set_status(state, format!("Rétroéclairage: {value:?}"));
                 if let Ok((_, bl)) = client.get_backlight() {
-                    state.lock().unwrap().backlight = Some(bl);
+                    lock(state).backlight = Some(bl);
                 }
             }
             Ok(_) => {}
@@ -300,7 +388,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
             Ok(code) if check(state, code, "color table") => {
                 set_status(state, "Couleurs appliquées");
                 if let Ok((_, ct)) = client.get_color_table() {
-                    state.lock().unwrap().color_table = Some(ct);
+                    lock(state).color_table = Some(ct);
                 }
             }
             Ok(_) => {}
@@ -308,14 +396,14 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
         },
         Cmd::ReadFanTable => match client.get_fan_table() {
             Ok((code, ft)) if check(state, code, "fan table") => {
-                state.lock().unwrap().fan_table = Some(ft);
+                lock(state).fan_table = Some(ft);
                 set_status(state, "Table BIOS relue");
             }
             Ok(_) => {}
             Err(e) => set_status(state, format!("fan table: {e}")),
         },
         Cmd::ReadKeyboard => {
-            let mut st = state.lock().unwrap();
+            let mut st = lock(state);
             if let Ok((_, kbd)) = client.get_kbd_type() {
                 st.kbd_type = Some(kbd);
             }
@@ -328,7 +416,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
         }
         Cmd::ReadGpuMode => {
             if let Ok((_, mode)) = client.get_gpu_mode() {
-                state.lock().unwrap().gpu_mode = Some(mode);
+                lock(state).gpu_mode = Some(mode);
             }
         }
         Cmd::SampleNow => sample(client, state, start),
@@ -443,7 +531,7 @@ impl App {
 
         let cfg = load_config();
         {
-            let mut st = state.lock().unwrap();
+            let mut st = lock(&state);
             st.curve = cfg.curve.unwrap_or_else(FanCurve::default_curve);
             st.curve_enabled = cfg.curve_enabled;
             st.elevated = is_elevated();
@@ -451,7 +539,7 @@ impl App {
 
         spawn_worker(rx, state.clone());
 
-        let curve_edit = state.lock().unwrap().curve.clone();
+        let curve_edit = lock(&state).curve.clone();
 
         // Restore curve activation in the worker
         let cfg2 = load_config();
@@ -490,8 +578,8 @@ impl App {
                 } else if event.id == tray.mode_cool {
                     let _ = self.tx.send(Cmd::SetFanMode(FanMode::Cool));
                 } else if event.id == tray.curve_toggle {
-                    let enabled = self.state.lock().unwrap().curve_enabled;
-                    let curve = self.state.lock().unwrap().curve.clone();
+                    let enabled = lock(&self.state).curve_enabled;
+                    let curve = lock(&self.state).curve.clone();
                     if enabled {
                         let _ = self.tx.send(Cmd::SetCurve(None));
                     } else {
@@ -513,7 +601,7 @@ impl App {
     }
 
     fn dashboard(&mut self, ui: &mut egui::Ui) {
-        let st = self.state.lock().unwrap();
+        let st = lock(&self.state);
         let snap = st.snapshot.clone();
 
         ui.horizontal(|ui| {
@@ -631,7 +719,7 @@ impl App {
 
     fn graph(&mut self, ui: &mut egui::Ui) {
         let history: Vec<(f64, f32, f32, f32)> =
-            self.state.lock().unwrap().history.iter().copied().collect();
+            lock(&self.state).history.iter().copied().collect();
         let temp_pts: PlotPoints = history.iter().map(|(t, temp, _, _)| [*t, *temp as f64]).collect();
         let cpu_pts: PlotPoints = history.iter().map(|(t, _, cpu, _)| [*t, *cpu as f64]).collect();
         let gpu_pts: PlotPoints = history.iter().map(|(t, _, _, gpu)| [*t, *gpu as f64]).collect();
@@ -699,7 +787,7 @@ impl App {
                 self.curve_edit.points.sort_by_key(|p| p.temp_c);
                 let _ = self.tx.send(Cmd::SetCurve(Some(self.curve_edit.clone())));
             }
-            let enabled = self.state.lock().unwrap().curve_enabled;
+            let enabled = lock(&self.state).curve_enabled;
             if ui
                 .selectable_label(enabled, if enabled { "Désactiver" } else { "Activer" })
                 .clicked()
@@ -734,7 +822,7 @@ impl App {
                 plot_ui.line(Line::new("GPU", pts_gpu));
             });
 
-        if let Some(ft) = self.state.lock().unwrap().fan_table.clone() {
+        if let Some(ft) = lock(&self.state).fan_table.clone() {
             ui.collapsing(format!("Table BIOS 0x2F ({} points, lecture seule)", ft.level_count), |ui| {
                 for (i, e) in ft.entries.iter().enumerate() {
                     ui.label(format!(
@@ -750,7 +838,7 @@ impl App {
     }
 
     fn keyboard(&mut self, ui: &mut egui::Ui) {
-        let st = self.state.lock().unwrap();
+        let st = lock(&self.state);
         let kbd = st.kbd_type;
         let bl = st.backlight;
         let ct = st.color_table.clone();
@@ -794,7 +882,7 @@ impl App {
         }
 
         ui.add_space(6.0);
-        let mode = self.state.lock().unwrap().gpu_mode;
+        let mode = lock(&self.state).gpu_mode;
         ui.horizontal(|ui| {
             ui.label(format!("MUX GPU: {mode:?}"));
             if ui.button("Relire").clicked() {
@@ -863,9 +951,30 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_millis(300));
 
         let (elevated, connect_error, status) = {
-            let st = self.state.lock().unwrap();
+            let st = lock(&self.state);
             (st.elevated, st.connect_error.clone(), st.status.clone())
         };
+
+        let (connected, last_sample_secs) = {
+            let st = lock(&self.state);
+            (st.connected, st.last_sample_at.map(|t| t.elapsed().as_secs()))
+        };
+        let stale = connected && last_sample_secs.map(|s| s > 8).unwrap_or(false);
+        if stale {
+            egui::Panel::top("stale").show(ui, |ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 140, 40),
+                    format!(
+                        "⚠ Le worker ne répond plus depuis {} s (log: %APPDATA%\\omen-rs\\omen-hub.log)",
+                        last_sample_secs.unwrap_or(0)
+                    ),
+                );
+            });
+        } else if !connected && connect_error.is_none() {
+            egui::Panel::top("connecting").show(ui, |ui| {
+                ui.label("Connexion WMI en cours…");
+            });
+        }
 
         if !elevated {
             egui::Panel::top("warn").show(ui, |ui| {
@@ -897,7 +1006,7 @@ impl eframe::App for App {
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (t, cpu, gpu) = {
-                        let st = self.state.lock().unwrap();
+                        let st = lock(&self.state);
                         (
                             st.snapshot.temp_c,
                             st.snapshot.fan_cpu_percent,
@@ -939,6 +1048,11 @@ impl eframe::App for App {
 // ---------------------------------------------------------------------------
 
 pub fn run() -> Result<(), eframe::Error> {
+    std::panic::set_hook(Box::new(|info| {
+        log_line(&format!("PANIC: {info}"));
+    }));
+    log_line("omen-hub: starting");
+
     let size = 32u32;
     let icon = egui::IconData {
         rgba: make_icon_rgba(size),
