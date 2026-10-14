@@ -6,8 +6,8 @@ license.workspace = true
 description = "OMEN control logic: modes, automatic mode, sensors, game detection, autostart"
 
 [dependencies]
-omen-wmi = { version = "0.1.0", path = "../omen-wmi", features = ["serde"] }
-omen-kbd = { version = "0.1.0", path = "../omen-kbd" }
+omen-wmi = { version = "0.2.0", path = "../omen-wmi", features = ["serde"] }
+omen-kbd = { version = "0.2.0", path = "../omen-kbd" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 windows = { version = "0.62.2", features = [

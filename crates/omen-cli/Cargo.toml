@@ -12,8 +12,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
-omen-core = { version = "0.1.0", path = "../omen-core" }
-omen-gui = { version = "0.1.0", path = "../omen-gui" }
-omen-kbd = { version = "0.1.0", path = "../omen-kbd" }
-omen-wmi = { version = "0.1.0", path = "../omen-wmi" }
+omen-core = { version = "0.2.0", path = "../omen-core" }
+omen-gui = { version = "0.2.0", path = "../omen-gui" }
+omen-kbd = { version = "0.2.0", path = "../omen-kbd" }
+omen-wmi = { version = "0.2.0", path = "../omen-wmi" }
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

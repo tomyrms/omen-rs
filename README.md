@@ -24,21 +24,31 @@ lancement au démarrage. Écrit en Rust, développé et testé sur un OMEN 17-cm
 
 ## Installer
 
+1. Téléchargez **`OMEN-Hub-RS-Setup-<version>.exe`** depuis la page
+   [Releases](https://github.com/tomyrms/omen-rs/releases/latest).
+2. Lancez-le : il installe l'application dans *Program Files*, crée les raccourcis et,
+   au choix, le **lancement au démarrage de Windows** et la commande `omen`.
+3. Ouvrez **OMEN Hub RS** (Bureau ou menu Démarrer). Windows demande l'autorisation
+   administrateur : c'est normal, l'interface BIOS de HP l'exige (comme l'application
+   officielle).
+
+Désinstaller : *Paramètres → Applications → OMEN Hub RS*. Une version **portable** (zip,
+sans installation) est aussi publiée avec chaque release.
+
+### Compiler soi-même
+
 ```powershell
 .\cargo-vs.cmd build --release     # compile (Visual Studio Build Tools requis)
-.\install.ps1                      # copie dans %LOCALAPPDATA%\Programs\OMEN Hub RS + raccourcis
+.\installer\build.ps1             # + installateur dans dist\ (Inno Setup 6 requis)
 ```
 
-Puis double-cliquez sur **OMEN Hub RS** (Bureau ou menu Démarrer). Windows demande
-l'autorisation administrateur : c'est normal, l'interface BIOS de HP l'exige (comme
-l'application officielle). Pour le lancement automatique : onglet **Réglages** →
-« Lancer OMEN Hub RS au démarrage de Windows ».
+Publier une version : changer `version` dans `Cargo.toml`, puis pousser un tag `vX.Y.Z` ;
+le workflow GitHub *Release* compile, teste et publie l'installateur.
 
 > Fermez l'OMEN Gaming Hub (et son icône) pendant l'utilisation : les deux applications
 > écrivent les mêmes réglages et la dernière qui écrit gagne. L'application vous prévient
 > si le Hub est ouvert.
 
-Désinstaller : `.\install.ps1 -Uninstall` (décochez d'abord le lancement au démarrage).
 
 ## Ligne de commande
 

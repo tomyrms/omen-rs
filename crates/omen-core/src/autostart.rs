@@ -97,7 +97,12 @@ fn task_xml(exe: &str, user: &str) -> String {
 
 /// Creates (or replaces) the logon task for the running executable.
 pub fn enable() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // From the command line (omen.exe), start the window app next to it.
+    let hub = exe.with_file_name("omen-hub.exe");
+    if hub.exists() {
+        exe = hub;
+    }
     let xml = task_xml(&exe.to_string_lossy(), &current_user());
     // schtasks expects the XML file in UTF-16 with a byte order mark.
     let mut bytes = vec![0xFF, 0xFE];
