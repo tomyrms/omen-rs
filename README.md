@@ -90,14 +90,22 @@ Or run the full test script: `run-omen-tests.ps1` (self-elevate via
 ## GUI
 
 ```powershell
-.\omen-hub.cmd        # self-elevating launcher (double-click friendly)
-omen                  # no subcommand: same GUI
-omen gui              # explicit
+target\debug\omen-hub.exe   # double-click: the embedded administrator manifest triggers UAC automatically
+.\omen-hub.cmd              # same thing, as a convenience alias
+omen                        # no subcommand: same GUI (use the in-app "relancer en admin" button if not elevated)
+omen gui                    # explicit
 ```
+
+`omen-hub.exe` embeds a `requireAdministrator` manifest (via `/MANIFESTUAC` in
+`crates/omen-gui/build.rs`), so no wrapper script is needed. The combined
+`omen.exe` binary keeps no manifest so `--help` and scripts stay usable
+without elevation; its GUI shows a banner with a one-click "relaunch as
+admin" when started unelevated.
 
 Dashboard (temperatures, fan levels, max-fan, fan modes, GPU power presets),
 history graph (temp + fan %), software fan curve editor (14+ editable points,
 applied every 2 s via `0x2E`), keyboard zone colors, MUX status, and a system
 tray (show, max fan on/off, fan modes, curve toggle, quit). Curve and mode are
-persisted in `%APPDATA%\omen-rs\config.json`. When not elevated, the GUI shows
-a banner with a one-click "relaunch as admin".
+persisted in `%APPDATA%\omen-rs\config.json`. Diagnostics are logged to
+`%APPDATA%\omen-rs\omen-hub.log` (connect steps, first sample, panics, stale
+worker detection shown as a banner).

@@ -536,6 +536,7 @@ impl App {
             st.curve_enabled = cfg.curve_enabled;
             st.elevated = is_elevated();
         }
+        log_line(&format!("app: elevated = {}", lock(&state).elevated));
 
         spawn_worker(rx, state.clone());
 
