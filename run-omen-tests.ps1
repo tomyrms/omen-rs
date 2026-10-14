@@ -9,18 +9,20 @@ function RunStep([string]$title, [string[]]$arguments) {
     $lines.Add("")
 }
 
-RunStep 'omen kbd (raw backlight bytes)' @('kbd')
-RunStep 'omen power (baseline)' @('power')
+RunStep 'kbd before' @('kbd')
 
-RunStep 'raw 0x37 PL4=180 (B4 00)' @('raw', '0x37', '0', 'B4', '00')
-RunStep 'power after 0x37' @('power')
-RunStep 'raw 0x37 PL4=200 restore (C8 00)' @('raw', '0x37', '0', 'C8', '00')
-RunStep 'power after restore' @('power')
+RunStep 'backlight OFF (regarde le clavier)' @('backlight', 'off')
+Start-Sleep -Seconds 6
 
-RunStep 'raw 0x29 PL1=100/PL2=100 (retest)' @('raw', '0x29', '0', '64', '64', 'FF', 'FF')
-RunStep 'power after 0x29' @('power')
-RunStep 'raw 0x29 restore 130/130' @('raw', '0x29', '0', '82', '82', 'FF', 'FF')
-RunStep 'power after 0x29 restore' @('power')
+RunStep 'backlight ON (regarde)' @('backlight', 'on')
+Start-Sleep -Seconds 6
+
+RunStep 'colors RED (regarde 10 s)' @('color4', 'FF0000:FF0000:FF0000:FF0000')
+Start-Sleep -Seconds 10
+
+RunStep 'colors restore' @('color4', '0F84FA:710FFA:F9350F:FAAC0F')
+Start-Sleep -Seconds 3
+RunStep 'kbd final' @('kbd')
 
 $lines -join "`r`n" | Out-File -FilePath $out -Encoding utf8
-"done: $((Get-Date).ToString('HH:mm:ss'))"
+"done"

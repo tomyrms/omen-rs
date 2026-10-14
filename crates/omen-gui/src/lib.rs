@@ -105,6 +105,7 @@ pub struct UiState {
     pub curve: FanCurve,
     pub curve_enabled: bool,
     pub curve_levels: Option<(u8, u8)>,
+    pub fan_mode_byte: Option<u8>,
     pub status: String,
     pub connect_error: Option<String>,
     pub elevated: bool,
@@ -347,6 +348,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
         }
         Cmd::SetFanMode(mode) => match client.set_fan_mode(mode) {
             Ok(code) if check(state, code, "fan mode") => {
+                lock(state).fan_mode_byte = Some(mode as u8);
                 set_status(state, format!("Mode: {mode}"));
                 let mut cfg = load_config();
                 cfg.fan_mode = Some(mode as u8);
@@ -398,6 +400,7 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
         },
         Cmd::SetBacklight(value) => match client.set_backlight(value) {
             Ok(code) if check(state, code, "backlight") => {
+                log_line(&format!("cmd: backlight {value:?} -> code {code}"));
                 set_status(state, format!("Rétroéclairage: {value:?}"));
                 if let Ok((_, bl)) = client.get_backlight() {
                     lock(state).backlight = Some(bl);
@@ -408,6 +411,10 @@ fn handle_cmd(client: &BiosClient, state: &Arc<Mutex<UiState>>, cmd: Cmd, start:
         },
         Cmd::SetColorTable(table) => match client.set_color_table(&table) {
             Ok(code) if check(state, code, "color table") => {
+                log_line(&format!(
+                    "cmd: color table {} zones -> code {code}",
+                    table.zones.len()
+                ));
                 set_status(state, "Couleurs appliquées");
                 if let Ok((_, ct)) = client.get_color_table() {
                     lock(state).color_table = Some(ct);
@@ -628,6 +635,7 @@ impl App {
     fn dashboard(&mut self, ui: &mut egui::Ui) {
         let st = lock(&self.state);
         let snap = st.snapshot.clone();
+        let last_mode = st.fan_mode_byte;
 
         if let Some(e) = &snap.error {
             ui.colored_label(egui::Color32::RED, format!("⚠ {e}"));
@@ -681,6 +689,15 @@ impl App {
                 }
             }
         });
+        ui.label(
+            egui::RichText::new(format!(
+                "ⓘ Modes perf : commande 0x1A acceptée (code 0) mais sans effet observable sur ce modèle — l'application réelle passe par l'EC/le service OmenCap.{}",
+                last_mode
+                    .map(|b| format!(" Dernier envoyé : 0x{b:02X}."))
+                    .unwrap_or_default()
+            ))
+            .weak(),
+        );
 
         ui.add_space(8.0);
         if let Some(gpu) = &snap.gpu_power {
@@ -886,6 +903,13 @@ impl App {
                 let _ = self.tx.send(Cmd::ReadKeyboard);
             }
         });
+
+        ui.label(
+            egui::RichText::new(
+                "ⓘ Testé sur ce modèle (PerKeyRgb) : ces commandes WMI sont bien écrites et relues (E4/64, couleurs), mais les LED ne réagissent pas — l'éclairage physique passe par le service OmenCap/HID (voir Light Studio).",
+            )
+            .weak(),
+        );
 
         if let Some(ct) = ct {
             ui.add_space(4.0);

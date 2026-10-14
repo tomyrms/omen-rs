@@ -88,9 +88,10 @@ and `Data`.
 | Item | Result |
 |---|---|
 | Fan table `0x2F` | 2 fans, 14 levels, 21 °C → 50 °C, levels up to `0x2E`/`0x30` |
-| Keyboard | `PerKeyRgb`; backlight raw `E4` (on) / `64` (off); 4-zone color table read/apply |
+| Keyboard | `PerKeyRgb`; backlight raw `E4`(on)/`64`(off) and zone colors round-trip in the BIOS registers, **but the physical LEDs do not react** on this model — lighting is HID-based (OmenCap `HIDService.dll`; app-side `HidMailroom`), separate RE needed |
 | MUX (`0x52` legacy) | `Hybrid` |
 | TGP round-trip | `gpu-set 0 0 1 87` → readback `0/0`; `gpu-set 1 1 1 87` → readback `1/1` |
 | Max fan | on → fan levels up (0x1C→0x23 CPU), off → down; state readback consistent |
 | PL writes | `0x29` code 0, `0x37` code 6, no `0x2A` change |
+| Fan modes `0x1A` | every value (0x10..0x50) returns code 0 but changes nothing observable: identical fan table, no readable state. The real mode switch on 2023+ models goes through the Embedded Controller (`HPCM = 0x95` in OmenMon's EC map) and the OmenCap service — an EC access driver is required to make this work from our side |
 
