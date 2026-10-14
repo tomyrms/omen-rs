@@ -860,7 +860,7 @@ impl App {
                 });
                 ui.checkbox(
                     &mut self.hub_disable_services,
-                    "Désactiver aussi ses services et tâches en arrière-plan (HP Omen, System Info, Network, App Helper, overlay, surveillance)",
+                    "Désactiver aussi ses services et tâches en arrière-plan (HP Omen, System Info, Network, App Helper, overlay, Optimizer, surveillance)",
                 );
             });
             if let Some(c) = self.hub_confirm {

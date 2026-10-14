@@ -23,9 +23,14 @@ pub const STORE_ID: &str = "9NQDW009T0T5";
 /// app helper). Diagnostics/analytics services belong to other HP tools.
 pub const SERVICES: &[&str] = &["HPOmenCap", "HPSysInfoCap", "HPNetworkCap", "HPAppHelperCap"];
 
-/// Per-user scheduled tasks HP installs with the Hub (install watchdog and
-/// in-game overlay), matched by name prefix and author "HP Inc.".
-pub const TASK_PREFIXES: &[&str] = &["OmenInstallMonitor", "OmenOverlay"];
+/// Scheduled tasks HP installs with the Hub, matched by author "HP Inc." and
+/// by the program they start (`...\HP\<folder>\...`): install watchdog,
+/// in-game overlay, "Optimizer" (system cleaner). Task names vary (some carry
+/// the user SID, `SystemOptimizer*` has no "Omen" in it), the programs do not.
+pub const TASK_PROGRAMS: &[&str] = &["OmenInstallMonitor", "Overlay", "SystemOptimizer"];
+
+/// Processes started by those tasks.
+const TASK_PROCESSES: &str = "OmenInstallMonitor,OverlayHelper,SystemOptimizer";
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -38,8 +43,10 @@ pub struct TaskState {
 
 impl TaskState {
     pub fn label(&self) -> &'static str {
-        if self.name.starts_with("OmenOverlay") {
+        if self.name.contains("Overlay") {
             "Overlay en jeu"
+        } else if self.name.contains("Optimizer") {
+            "Optimizer (nettoyage système)"
         } else {
             "Surveillance de l'installation"
         }
@@ -158,9 +165,10 @@ fn read_services() -> Vec<ServiceState> {
 }
 
 fn read_tasks() -> Vec<TaskState> {
-    let filter = TASK_PREFIXES.iter().map(|p| format!("$_.TaskName -like '{p}*'")).collect::<Vec<_>>().join(" -or ");
+    // `.` stands for the path separator (avoids escaping backslashes twice).
+    let pattern = TASK_PROGRAMS.join("|");
     let script = format!(
-        "$r=@(Get-ScheduledTask | Where-Object {{ ({filter}) -and $_.Author -like 'HP*' }} | \
+        "$r=@(Get-ScheduledTask | Where-Object {{ $_.Author -like 'HP*' -and (($_.Actions.Execute -join ' ') -match 'HP.({pattern})') }} | \
          ForEach-Object {{ [pscustomobject]@{{name=$_.TaskName;enabled=($_.State -ne 'Disabled');running=($_.State -eq 'Running')}} }}); \
          ConvertTo-Json -InputObject $r -Compress"
     );
@@ -190,11 +198,15 @@ pub fn status() -> HubStatus {
 pub fn uninstall(disable_services: bool, progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     let before = status();
     // Keep the oldest backup: it describes the original installation. Parts
-    // missing from an older backup (tasks) are added with their current state.
+    // missing from an older backup (new tasks) are added with their current state.
     let b = match load_backup() {
         None => Some(Backup { version: before.version.clone(), services: before.services.clone(), tasks: before.tasks.clone() }),
-        Some(mut b) if b.tasks.is_empty() && !before.tasks.is_empty() => {
-            b.tasks = before.tasks.clone();
+        Some(mut b) if before.tasks.iter().any(|t| !b.tasks.iter().any(|o| o.name == t.name)) => {
+            for t in &before.tasks {
+                if !b.tasks.iter().any(|o| o.name == t.name) {
+                    b.tasks.push(t.clone());
+                }
+            }
             Some(b)
         }
         Some(_) => None,
@@ -234,7 +246,7 @@ pub fn uninstall(disable_services: bool, progress: &mut dyn FnMut(&str)) -> Resu
             .map_err(|e| format!("tâche {} : {e}", t.name))?;
         }
         // Instances started before the tasks were stopped.
-        let _ = powershell("Get-Process OmenInstallMonitor,OverlayHelper -ErrorAction SilentlyContinue | Stop-Process -Force");
+        let _ = powershell(&format!("Get-Process {TASK_PROCESSES} -ErrorAction SilentlyContinue | Stop-Process -Force"));
     }
 
     let after = status();

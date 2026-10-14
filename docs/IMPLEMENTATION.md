@@ -142,7 +142,8 @@ Jamais envoyé : `10 09 …` (passage en mode mise à jour du firmware).
 - **OMEN Gaming Hub** (`omen-core::vendor`) : paquet Store `AD2F1837.OMENCommandCenter`
   (ID Store `9NQDW009T0T5`). Désinstallation = `Remove-AppxPackage` ; option : arrêt et
   désactivation de `HPOmenCap`, `HPSysInfoCap`, `HPNetworkCap`, `HPAppHelperCap` et des
-  tâches planifiées HP `OmenInstallMonitor*` et `OmenOverlay*` (auteur HP Inc.). L'état
+  tâches planifiées HP (auteur HP Inc.) qui lancent un programme de `HP\OmenInstallMonitor`,
+  `HP\Overlay` ou `HP\SystemOptimizer*` (dont `SystemOptimizer`, sans « Omen » dans le nom). L'état
   d'origine (type de démarrage, en cours ou non) est sauvegardé dans
   `%APPDATA%\omen-rs\hub-backup.json` avant toute modification ; « Réinstaller comme avant »
   rétablit les services puis installe le paquet par `winget` (repli : page du Store). Les
