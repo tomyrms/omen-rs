@@ -1,0 +1,5 @@
+/target
+*.log
+live-test*.txt
+.vscode/
+.idea/

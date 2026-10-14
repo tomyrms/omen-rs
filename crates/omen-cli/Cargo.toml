@@ -1,0 +1,16 @@
+[package]
+name = "omen-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust rewrite of the OMEN Gaming Hub control path (PoC CLI)"
+
+[[bin]]
+name = "omen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+omen-gui = { version = "0.1.0", path = "../omen-gui" }
+omen-wmi = { version = "0.1.0", path = "../omen-wmi" }
