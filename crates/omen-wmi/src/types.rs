@@ -478,3 +478,151 @@ pub struct SensorSnapshot {
     pub gpu_power: Option<GpuPowerData>,
     pub error: Option<String>,
 }
+
+/// Index of a BIOS thermal sensor read through `0x23`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Sensor {
+    /// Infrared skin/chassis sensor (the vendor service uses it in its fan curve).
+    Ir = 0,
+    /// Ambient / board sensor.
+    Ambient = 1,
+    /// Platform controller hub.
+    Pch = 2,
+    /// CPU voltage regulator.
+    Vr = 3,
+}
+
+/// User-facing performance profiles and their BIOS mode bytes (`0x1A`).
+///
+/// Thermal policy V1 machines (this OMEN 17, `SystemDesignData[3] = 1`) use
+/// the "L" levels: Default/Eco -> L2 (`0x30`), Performance -> L7 (`0x31`),
+/// Cool/Quiet -> L4 (`0x50`). Policy V0 machines take the legacy values 0..4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PerformanceProfile {
+    Quiet,
+    Balanced,
+    Performance,
+}
+
+impl PerformanceProfile {
+    pub fn bios_mode(self, thermal_policy: u8) -> u8 {
+        match (thermal_policy, self) {
+            (0, PerformanceProfile::Quiet) => 0x03,
+            (0, PerformanceProfile::Balanced) => 0x00,
+            (0, PerformanceProfile::Performance) => 0x01,
+            (_, PerformanceProfile::Quiet) => 0x50,
+            (_, PerformanceProfile::Balanced) => 0x30,
+            (_, PerformanceProfile::Performance) => 0x31,
+        }
+    }
+}
+
+/// Fan type nibbles and capability bits (`0x2C`).
+#[derive(Debug, Clone, Default)]
+pub struct FanTypeInfo {
+    /// One entry per fan slot (low nibble first); 0 = no fan.
+    pub types: Vec<u8>,
+    /// Capability bitmap, bytes 8..9 of the response.
+    pub capabilities: u16,
+}
+
+impl FanTypeInfo {
+    pub fn parse(data: &[u8]) -> Self {
+        let get = |i: usize| data.get(i).copied().unwrap_or(0);
+        let mut types = Vec::with_capacity(7);
+        for i in 0..4 {
+            types.push(get(i) & 0x0F);
+            types.push(get(i) >> 4);
+        }
+        types.pop();
+        Self {
+            types,
+            capabilities: u16::from(get(8)) | (u16::from(get(9)) << 8),
+        }
+    }
+
+    /// Number of fans present (non-zero type).
+    pub fn fan_count(&self) -> usize {
+        self.types.iter().filter(|t| **t != 0).count()
+    }
+}
+
+/// Power adapter state (family `0x00001`, operation 15).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AdapterStatus {
+    /// 0 not supported, 1 meets requirement, 2 below requirement,
+    /// 3 on battery, 4 not functioning, 5 USB-C.
+    pub status: u8,
+    /// Adapter rating in watts (0 = unknown).
+    pub watts: u16,
+}
+
+impl AdapterStatus {
+    pub fn parse(data: &[u8]) -> Self {
+        let get = |i: usize| data.get(i).copied().unwrap_or(0);
+        let raw = get(3);
+        Self {
+            status: get(0),
+            watts: if raw == 0xFF { 0 } else { u16::from(raw) * 5 },
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self.status {
+            1 => "secteur (puissance OK)",
+            2 => "secteur (chargeur trop faible)",
+            3 => "batterie",
+            4 => "chargeur défaillant",
+            5 => "secteur USB-C",
+            _ => "inconnu",
+        }
+    }
+}
+
+/// Converts a raw fan level (hundreds of RPM) to RPM.
+pub fn level_to_rpm(level: u8) -> u32 {
+    u32::from(level) * 100
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_mapping_follows_thermal_policy() {
+        assert_eq!(PerformanceProfile::Balanced.bios_mode(1), 0x30);
+        assert_eq!(PerformanceProfile::Performance.bios_mode(1), 0x31);
+        assert_eq!(PerformanceProfile::Quiet.bios_mode(1), 0x50);
+        assert_eq!(PerformanceProfile::Performance.bios_mode(0), 0x01);
+    }
+
+    #[test]
+    fn fan_type_parsing() {
+        let mut d = [0u8; 16];
+        d[0] = 0x21;
+        d[8] = 0x03;
+        let f = FanTypeInfo::parse(&d);
+        assert_eq!(f.types[0], 1);
+        assert_eq!(f.types[1], 2);
+        assert_eq!(f.fan_count(), 2);
+        assert_eq!(f.capabilities, 3);
+    }
+
+    #[test]
+    fn curve_interpolates_and_clamps() {
+        let c = FanCurve::default_curve();
+        assert_eq!(c.interpolate(10).0, 0x1A);
+        assert_eq!(c.interpolate(120).0, FanCurve::LEVEL_MAX);
+        let (mid, _) = c.interpolate(47);
+        assert!(mid > 0x1A && mid < 0x22);
+    }
+
+    #[test]
+    fn adapter_parsing() {
+        let a = AdapterStatus::parse(&[1, 0, 0, 56]);
+        assert_eq!(a.watts, 280);
+        assert_eq!(a.status, 1);
+    }
+}

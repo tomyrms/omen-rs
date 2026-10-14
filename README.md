@@ -1,127 +1,79 @@
-# omen-rs
+# OMEN Hub RS
 
-Rust rewrite of the OMEN Gaming Hub **hardware control path** on OMEN laptops,
-built from reverse-engineering evidence gathered on a real machine
-(OMEN by HP Laptop 17-cm2xxx, board 8BB0, BIOS F.10, OMEN Gaming Hub 1101.2609.11.0).
+Remplaçant simple et open-source des réglages de l'**OMEN Gaming Hub** pour les PC
+portables HP OMEN : modes de performance avec **mode Auto**, ventilateurs, **clavier RGB**,
+lancement au démarrage. Écrit en Rust, développé et testé sur un OMEN 17-cm2xxx
+(carte 8BB0, BIOS F.10, RTX 4070 Laptop, i7-13700HX).
 
-The proprietary UI, store, cloud and analytics layers are out of scope; this
-project reimplements the local hardware control that actually matters:
-fans, thermal readings, power limits (PL1/PL2/PL4, concurrent), GPU power
-(custom TGP / PPAB), and fan performance modes.
+![Accueil](docs/screenshots/home.png)
 
-## Why this works
+## Ce que fait l'application
 
-The OMEN Gaming Hub talks to the hardware through the HP BIOS WMI interface
-(`root\WMI`, class `hpqBIntM`, methods `hpqBIOSInt0/4/128/1024/4096`).
-The protocol was established from:
+| | |
+|---|---|
+| **Modes** | Un clic : **Auto** (recommandé), **Silencieux**, **Équilibré**, **Performance**, **Max** (ventilateurs à fond). |
+| **Mode Auto** | Comme le Hub : jeu lancé ou PC très sollicité → Performance ; trop chaud → ventilateurs au max ; PC au repos → Silencieux. Monte vite, redescend lentement (pas d'effet yo-yo). |
+| **Ventilateurs** | Vitesses en tr/min, mode Max, courbe personnalisée, vitesse fixe. |
+| **Clavier RGB** | Couleur unie (9 couleurs + nuancier), 9 effets animés (vague, respiration, cycle…), thèmes ou vos couleurs, extinction, éclairage d'usine. |
+| **Surveillance** | Charge CPU/GPU, températures (GPU NVIDIA, zone thermique, capteurs du BIOS), vitesses ventilateurs, alimentation, historique 10 min. |
+| **Démarrage** | Option « Lancer au démarrage de Windows » (sans fenêtre UAC à chaque démarrage), démarrage réduit près de l'horloge, la croix garde l'appli en arrière-plan. |
 
-- **REA static analysis** of the Hub's .NET assemblies on the target machine
-  (command IDs observed in the IL of `HP.Omen.Background.PerformanceControl.dll`
-  and friends, e.g. `BiosWmiCmd_Set(0x20008, 0x29)` for CPU power limits);
-- the **public protocol notes of OmenMon** (GPL-3.0, used strictly as factual
-  interface documentation: parameter classes, the `SECU` sign, command IDs);
-- **live read-only verification** against the machine (see
-  `docs/bios-wmi-commands.md`).
-
-This crate is an original implementation and contains no OmenMon code.
-
-The interface requires an **elevated token** (Administrator), exactly like the
-vendor application and OmenMon.
-
-## Layout
-
-```
-crates/omen-wmi   Protocol client: hpqBIntM / hpqBIOSInt<n> over COM (windows crate)
-crates/omen-cli   "omen" CLI: info, fans, temp, power, gpu-power, and setters
-crates/omen-gui   "omen-hub" GUI: dashboard, fan curve editor, history, tray
-docs/             Full RE documentation (see below)
-```
-
-## Documentation
-
-- `docs/bios-wmi-commands.md` — BIOS WMI command table + raw-COM quirks
-- `docs/keyboard-lighting-re.md` — Primax keyboard MCU protocol over HID
-- `docs/omen-hub-architecture.md` — full A-to-Z map of the OMEN Gaming Hub
-  (packages, drivers, services, all control interfaces, subsystem inventory)
-
-Native analysis runs through REA's Ghidra provider (Ghidra 12.1.4 + JDK 21
-installed; set `GHIDRA_INSTALL_DIR` and `JAVA_HOME`, then
-`REA_ANALYSIS_PROVIDER=ghidra`) against the native pieces: `OmenCap` service
-DLLs, the HP drivers (`hpomencustomcapdriver.sys`, `HpReadHWData.sys`),
-`EffectEngine.dll` and other app helpers.
-
-## Build
-
-The machine's PATH has MSYS2's GNU `link.exe` ahead of MSVC's, so plain
-`cargo build` can pick the wrong linker. Use the wrapper:
+## Installer
 
 ```powershell
-.\cargo-vs.cmd build --release      # loads vcvars64, then runs cargo
-.\cargo-vs.cmd check --workspace
+.\cargo-vs.cmd build --release     # compile (Visual Studio Build Tools requis)
+.\install.ps1                      # copie dans %LOCALAPPDATA%\Programs\OMEN Hub RS + raccourcis
 ```
 
-(Requirements: rustup msvc toolchain, Visual Studio C++ build tools,
-Windows 11 SDK — all already present on the development machine.)
+Puis double-cliquez sur **OMEN Hub RS** (Bureau ou menu Démarrer). Windows demande
+l'autorisation administrateur : c'est normal, l'interface BIOS de HP l'exige (comme
+l'application officielle). Pour le lancement automatique : onglet **Réglages** →
+« Lancer OMEN Hub RS au démarrage de Windows ».
 
-## Usage (from an elevated terminal)
+> Fermez l'OMEN Gaming Hub (et son icône) pendant l'utilisation : les deux applications
+> écrivent les mêmes réglages et la dernière qui écrit gagne. L'application vous prévient
+> si le Hub est ouvert.
+
+Désinstaller : `.\install.ps1 -Uninstall` (décochez d'abord le lancement au démarrage).
+
+## Ligne de commande
 
 ```powershell
-.\target\debug\omen.exe info          # capabilities, fans, GPU power, thermal policy
-.\target\debug\omen.exe fans          # current fan levels + max-fan state
-.\target\debug\omen.exe temp          # thermal sensor + throttling state
-.\target\debug\omen.exe power         # raw 0x2A power data
-.\target\debug\omen.exe fan-table     # BIOS fan table (0x2F)
-.\target\debug\omen.exe kbd           # keyboard type, backlight (raw), color zones
-.\target\debug\omen.exe backlight on|off|status
-.\target\debug\omen.exe color4 RRGGBB:RRGGBB:RRGGBB:RRGGBB   # apply zone colors
-.\target\debug\omen.exe gpu-mode [hybrid|discrete|optimus --yes]  # MUX (reboot)
-.\target\debug\omen.exe watch --interval 2                        # monitoring loop
-.\target\debug\omen.exe raw 0x21 4                               # raw command experiments
-.\target\debug\omen.exe maxfan on     # write path: max fan speed on/off
-.\target\debug\omen.exe fan-mode default|performance|cool|l0..l6|legacy-*
-.\target\debug\omen.exe fan-level <cpu> <gpu>     # raw units, observed 0x15..0x39
-.\target\debug\omen.exe gpu-set <custom_tgp> <ppab> <d_state> <peak_temp>
-.\target\debug\omen.exe cpu-set <pl1> <pl2> <pl4> <with_gpu>   # 255 = leave unchanged
+omen                          # ouvre la fenêtre
+omen mode performance         # silencieux | equilibre | performance | max   (admin)
+omen sensors                  # capteurs (la partie BIOS demande l'admin)
+omen fans                     # vitesses ventilateurs                        (admin)
+omen max-fan on|off           # ventilateurs à fond                          (admin)
+omen kbd-set rouge            # clavier : couleur (nom ou RRGGBB) --intensite 60
+omen kbd-effect vague         # respiration, cycle, onde, pluie... --vitesse 2 --couleurs rouge,bleu
+omen kbd-off | kbd-reset | kbd-info
+omen autostart on|off|status
+omen --help                   # tout le reste (gpu-mode, fan-table, raw...)
 ```
 
-Or run the full test script: `run-omen-tests.ps1` (self-elevate via
-`run-omen-tests-as-admin.cmd`).
+Les commandes BIOS lancées sans droits proposent d'elles-mêmes une relance en administrateur.
 
-## Status (live-verified on the target, 2026-10-14)
+## Comment ça marche
 
-- [x] Protocol + command table extracted from the Hub IL (REA) and validated live
-- [x] Rust client (`omen-wmi`): reads (system/fans/thermal/power/keyboard/MUX), writes (max fan, fan levels, fan mode, TGP, backlight, colors)
-- [x] CLI (`omen`) + GUI (`omen-hub`: dashboard, fan curve editor, history graph, keyboard colors, tray)
-- [x] Live round-trip: `max-fan on` ramps the fans; TGP min/max round-trips with readback; backlight toggles with raw readback (`E4`/`64`)
-- [x] BIOS fan table read (`0x2F`, 14 points); MUX read (Hybrid); keyboard `PerKeyRgb`, 4-zone color table
-- [ ] CPU/GPU temperatures: `0x23` does not track CPU load on this model (IR/ambient sensor); needs the EC or the HP driver path (`HPReadHWData.sys`)
-- [ ] PL1/PL2 writes: accepted by `0x29` (code 0) but not reflected in the `0x2A` readback; `0x37` rejected (code 6). Needs MSR (`0x610`) verification
-- [ ] Fan table write (`0x32`, desktop-only per vendor docs) and per-key RGB via HID (separate RE)
-  - Keyboard lighting RE (Primax MCU, V1 command set, GetDeviceInfo round-trip) documented in
-    `docs/keyboard-lighting-re.md`; final command sequence pending USB capture
-- [ ] Performance-mode sync with the Hub background service (named pipes)
-- [ ] GPU mode write (`0x52`, reboot required) — implemented in the CLI, gated behind `--yes`
-- [ ] Long-running ownership fix for SAFEARRAY lifetimes in `omen-wmi`
-
-## GUI
-
-```powershell
-target\debug\omen-hub.exe   # double-click: the embedded administrator manifest triggers UAC automatically
-.\omen-hub.cmd              # same thing, as a convenience alias
-omen                        # no subcommand: same GUI (use the in-app "relancer en admin" button if not elevated)
-omen gui                    # explicit
+```
+crates/omen-wmi   Interface BIOS HP (WMI root\WMI hpqBIntM) : modes, ventilateurs, GPU, capteurs, MUX
+crates/omen-kbd   Clavier RGB en HID direct (contrôleur USB 0461:4E9A, interface MI_02)
+crates/omen-core  Modes, mode Auto, capteurs (PDH/NVML), détection de jeux, réglages, démarrage auto
+crates/omen-gui   Fenêtre (egui) + icône de notification       → omen-hub.exe
+crates/omen-cli   Ligne de commande                              → omen.exe
 ```
 
-`omen-hub.exe` embeds a `requireAdministrator` manifest (via `/MANIFESTUAC` in
-`crates/omen-gui/build.rs`), so no wrapper script is needed. The combined
-`omen.exe` binary keeps no manifest so `--help` and scripts stay usable
-without elevation; its GUI shows a banner with a one-click "relaunch as
-admin" when started unelevated.
+Détails techniques, protocoles et état des vérifications : [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
+Rétro-ingénierie complète du Hub : [docs/omen-hub/](docs/omen-hub/README.md).
 
-Dashboard (temperatures, fan levels, max-fan, fan modes, GPU power presets),
-history graph (temp + fan %), software fan curve editor (14+ editable points,
-applied every 2 s via `0x2E`), keyboard zone colors, MUX status, and a system
-tray (show, max fan on/off, fan modes, curve toggle, quit). Curve and mode are
-persisted in `%APPDATA%\omen-rs\config.json`. Diagnostics are logged to
-`%APPDATA%\omen-rs\omen-hub.log` (connect steps, first sample, panics, stale
-worker detection shown as a banner).
+Tout passe par les interfaces prévues par HP : l'interface WMI du BIOS et le
+périphérique HID du clavier. Aucun pilote noyau, aucun accès MSR/PCI : le pilote
+`HpReadHWData` de HP est volontairement hors périmètre.
+
+## Crédits et licence
+
+Implémentation originale (MIT). Les faits de protocole (codes de commande, formats de
+trames) ont été établis par analyse de l'application installée sur ce matériel
+(ilspycmd, Ghidra, REA) et par vérification en direct, avec les notes publiques
+d'[OmenMon](https://github.com/OmenMon/OmenMon) comme référence factuelle. Aucun code
+propriétaire n'est inclus.

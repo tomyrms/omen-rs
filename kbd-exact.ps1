@@ -68,6 +68,8 @@ function Send([int]$c1, [int]$c2, [int]$len, [byte[]]$data, [string]$label) {
 }
 
 function Set-Color([int]$R, [int]$G, [int]$B) {
+    Send 12 0 1 @([byte]3) '0.brightness-max'
+    Start-Sleep -Milliseconds 60
     Send 9 0 1 @([byte]0xFF) '1.lighting-on'
     Start-Sleep -Milliseconds 60
     Send 4 0 2 @([byte]0xFC, [byte]0xEA) '2.user-mode-enable'

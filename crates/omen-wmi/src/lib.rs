@@ -33,8 +33,8 @@ use windows::Win32::System::Ole::{
     SafeArrayUnaccessData,
 };
 use windows::Win32::System::Variant::{
-    VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VARENUM, VT_ARRAY, VT_I4, VT_NULL, VT_UI1,
-    VT_UI4, VT_UNKNOWN,
+    VariantClear, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VARENUM, VT_ARRAY, VT_I4,
+    VT_NULL, VT_UI1, VT_UI4, VT_UNKNOWN,
 };
 use windows::Win32::System::Wmi::{
     IWbemClassObject, IWbemLocator, IWbemServices, WBEM_GENERIC_FLAG_TYPE, WbemLocator,
@@ -85,11 +85,30 @@ fn step(name: &str, e: Error) -> Error {
     Error::new(e.code(), format!("{name}: {}", e.message()))
 }
 
-/// Byte-array VARIANT backed by a newly allocated SAFEARRAY.
+/// A VARIANT that is cleared (SAFEARRAY freed, interface released) on drop.
 ///
-/// The SAFEARRAY is intentionally not freed: WMI may keep a reference to the
-/// property while the method call is in flight, and these are short-lived CLI
-/// processes. Long-running consumers should revisit this ownership decision.
+/// `IWbemClassObject::Put` copies the value it is given, and values returned
+/// by `Get` are owned by the caller, so every VARIANT used by `send` can be
+/// released as soon as it goes out of scope. This keeps long-running
+/// consumers (the GUI and its auto mode, which call `send` every second) from
+/// leaking memory.
+struct OwnedVariant(VARIANT);
+
+impl OwnedVariant {
+    fn empty() -> Self {
+        Self(VARIANT::default())
+    }
+}
+
+impl Drop for OwnedVariant {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = VariantClear(&mut self.0);
+        }
+    }
+}
+
+/// Byte-array VARIANT backed by a newly allocated SAFEARRAY.
 fn variant_from_bytes(bytes: &[u8]) -> WinResult<VARIANT> {
     unsafe {
         let sa = SafeArrayCreateVector(VT_UI1, 0, bytes.len() as u32);
@@ -354,9 +373,9 @@ impl BiosClient {
                 .SpawnInstance(0)
                 .map_err(|e| step("SpawnInstance(hpqBDataIn)", e))?;
 
-            let sign_v = variant_from_bytes(&SIGN)?;
+            let sign_v = OwnedVariant(variant_from_bytes(&SIGN)?);
             data_inst
-                .Put(&BSTR::from("Sign"), 0, &sign_v, CIM_TYPE_UI1_ARRAY)
+                .Put(&BSTR::from("Sign"), 0, &sign_v.0, CIM_TYPE_UI1_ARRAY)
                 .map_err(|e| step("Put(Sign)", e))?;
 
             let command_v = variant_from_i32(command as i32);
@@ -376,9 +395,9 @@ impl BiosClient {
 
             match payload {
                 Some(bytes) => {
-                    let data_v = variant_from_bytes(bytes)?;
+                    let data_v = OwnedVariant(variant_from_bytes(bytes)?);
                     data_inst
-                        .Put(&BSTR::from(DATA_FIELD), 0, &data_v, CIM_TYPE_UI1_ARRAY)
+                        .Put(&BSTR::from(DATA_FIELD), 0, &data_v.0, CIM_TYPE_UI1_ARRAY)
                         .map_err(|e| step("Put(hpqBData)", e))?;
                     let size_v = variant_from_i32(bytes.len() as i32);
                     data_inst
@@ -394,9 +413,9 @@ impl BiosClient {
             }
 
             let data_unknown: IUnknown = data_inst.into();
-            let in_data_v = variant_from_unknown(&data_unknown);
+            let in_data_v = OwnedVariant(variant_from_unknown(&data_unknown));
             in_params
-                .Put(&BSTR::from("InData"), 0, &in_data_v, CIM_TYPE_UNKNOWN)
+                .Put(&BSTR::from("InData"), 0, &in_data_v.0, CIM_TYPE_UNKNOWN)
                 .map_err(|e| step("Put(InData)", e))?;
 
             let mut out_params: Option<IWbemClassObject> = None;
@@ -413,28 +432,28 @@ impl BiosClient {
                 .map_err(|e| step("ExecMethod", e))?;
             let out_params = out_params.ok_or_else(|| fail("no method output"))?;
 
-            let mut out_v = VARIANT::default();
+            let mut out_v = OwnedVariant::empty();
             out_params
-                .Get(&BSTR::from("OutData"), 0, &mut out_v, None, None)
+                .Get(&BSTR::from("OutData"), 0, &mut out_v.0, None, None)
                 .map_err(|e| step("Get(OutData)", e))?;
-            let out_obj: IWbemClassObject = variant_as_unknown(&out_v)
+            let out_obj: IWbemClassObject = variant_as_unknown(&out_v.0)
                 .and_then(|u| u.cast().ok())
                 .ok_or_else(|| fail("cannot convert OutData"))?;
 
-            let mut code_v = VARIANT::default();
+            let mut code_v = OwnedVariant::empty();
             out_obj
-                .Get(&BSTR::from("rwReturnCode"), 0, &mut code_v, None, None)
+                .Get(&BSTR::from("rwReturnCode"), 0, &mut code_v.0, None, None)
                 .map_err(|e| step("Get(rwReturnCode)", e))?;
-            let code = variant_as_i32(&code_v).unwrap_or(-1);
+            let code = variant_as_i32(&code_v.0).unwrap_or(-1);
 
             let mut data = Vec::new();
             if out_size > 0 {
-                let mut data_v = VARIANT::default();
+                let mut data_v = OwnedVariant::empty();
                 if out_obj
-                    .Get(&BSTR::from("Data"), 0, &mut data_v, None, None)
+                    .Get(&BSTR::from("Data"), 0, &mut data_v.0, None, None)
                     .is_ok()
                 {
-                    data = variant_as_bytes(&data_v);
+                    data = variant_as_bytes(&data_v.0);
                 }
             }
 
@@ -506,6 +525,69 @@ impl BiosClient {
     pub fn get_temperature(&self) -> WinResult<(i32, u8)> {
         let (code, data) = self.send(CMD_DEFAULT, cmd::GET_TEMPERATURE, Some(&[1, 0, 0, 0]), 4)?;
         Ok((code, data.first().copied().unwrap_or(0)))
+    }
+
+    /// Reads one BIOS thermal sensor (`0x23` with a sensor index), in °C.
+    pub fn get_sensor(&self, sensor: Sensor) -> WinResult<(i32, u8)> {
+        let (code, data) = self.send(
+            CMD_DEFAULT,
+            cmd::GET_TEMPERATURE,
+            Some(&[sensor as u8, 0, 0, 0]),
+            4,
+        )?;
+        Ok((code, data.first().copied().unwrap_or(0)))
+    }
+
+    /// Writes the fan speed levels of up to three fans (`0x2E`). Units are
+    /// hundreds of RPM (e.g. 0x23 = 35 = ~3500 rpm); 255 leaves a fan alone.
+    pub fn set_fan_levels(&self, cpu: u8, gpu: u8, fan3: u8) -> WinResult<i32> {
+        let (code, _) =
+            self.send(CMD_DEFAULT, cmd::SET_FAN_LEVEL, Some(&[cpu, gpu, fan3, 0]), 0)?;
+        Ok(code)
+    }
+
+    /// Writes a raw thermal mode byte (`0x1A`, payload `FF mode bios 00`).
+    /// `bios_fan_control` hands fan regulation back to the BIOS, which is
+    /// what the vendor service does when it is not running its own curve.
+    pub fn set_fan_mode_raw(&self, mode: u8, bios_fan_control: bool) -> WinResult<i32> {
+        let (code, _) = self.send(
+            CMD_DEFAULT,
+            cmd::SET_FAN_MODE,
+            Some(&[0xFF, mode, u8::from(bios_fan_control), 0]),
+            0,
+        )?;
+        Ok(code)
+    }
+
+    /// Sets a user-facing performance profile, translated for the machine's
+    /// thermal policy version (see [`PerformanceProfile::bios_mode`]).
+    pub fn set_performance_profile(
+        &self,
+        profile: PerformanceProfile,
+        policy: u8,
+        bios_fan_control: bool,
+    ) -> WinResult<i32> {
+        self.set_fan_mode_raw(profile.bios_mode(policy), bios_fan_control)
+    }
+
+    /// Fan types and capability bits (`0x2C`).
+    pub fn get_fan_type_info(&self) -> WinResult<(i32, FanTypeInfo)> {
+        let (code, data) =
+            self.send(CMD_DEFAULT, cmd::GET_FAN_TYPE, Some(&[0, 0, 0, 0]), 128)?;
+        Ok((code, FanTypeInfo::parse(&data)))
+    }
+
+    /// Power adapter status (family `0x00001`, operation 15).
+    pub fn get_adapter_status(&self) -> WinResult<(i32, AdapterStatus)> {
+        let (code, data) = self.send(CMD_LEGACY, cmd::GET_ADAPTER_STATUS, None, 4)?;
+        Ok((code, AdapterStatus::parse(&data)))
+    }
+
+    /// CPU current limit (`0x37`, payload `00 0F lo hi`), in amperes.
+    pub fn set_icc_max(&self, amps: u16) -> WinResult<i32> {
+        let [lo, hi] = amps.to_le_bytes();
+        let (code, _) = self.send(CMD_DEFAULT, cmd::SET_ICC_MAX, Some(&[0, 15, lo, hi, 0]), 0)?;
+        Ok(code)
     }
 
     pub fn get_throttling(&self) -> WinResult<(i32, Throttling)> {

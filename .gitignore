@@ -4,3 +4,6 @@ live-test*.txt
 .vscode/
 .idea/
 screen*.png
+live-*.txt
+msr-read-result.txt
+.project-memory/

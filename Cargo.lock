@@ -2699,8 +2699,22 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "omen-core",
  "omen-gui",
+ "omen-kbd",
  "omen-wmi",
+ "windows",
+]
+
+[[package]]
+name = "omen-core"
+version = "0.1.0"
+dependencies = [
+ "omen-kbd",
+ "omen-wmi",
+ "serde",
+ "serde_json",
+ "windows",
 ]
 
 [[package]]
@@ -2708,11 +2722,20 @@ name = "omen-gui"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "egui",
  "egui_plot",
+ "omen-core",
+ "omen-kbd",
  "omen-wmi",
- "serde",
- "serde_json",
  "tray-icon",
+ "windows",
+]
+
+[[package]]
+name = "omen-kbd"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "windows",
 ]
 

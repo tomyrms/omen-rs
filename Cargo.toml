@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/omen-wmi", "crates/omen-cli", "crates/omen-gui"]
+members = ["crates/omen-wmi", "crates/omen-kbd", "crates/omen-core", "crates/omen-cli", "crates/omen-gui"]
 
 [workspace.package]
 version = "0.1.0"

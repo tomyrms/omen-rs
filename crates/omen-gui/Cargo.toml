@@ -3,7 +3,7 @@ name = "omen-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "OMEN Hub RS: GUI dashboard, fan curve editor and monitoring tray"
+description = "OMEN Hub RS: simple control window (modes, auto mode, fans, keyboard) with tray icon"
 
 [lib]
 name = "omen_gui"
@@ -12,12 +12,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "omen-hub"
 path = "src/bin/omen-hub.rs"
+test = false
 
 [dependencies]
 eframe = "0.36.2"
+egui = "0.36.2"
 egui_plot = "0.37.0"
+omen-core = { version = "0.1.0", path = "../omen-core" }
+omen-kbd = { version = "0.1.0", path = "../omen-kbd" }
 omen-wmi = { version = "0.1.0", path = "../omen-wmi", features = ["serde"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
 tray-icon = "0.26.1"
-windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Com", "Win32_Security"] }
+windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Com", "Win32_System_Threading", "Win32_Security"] }

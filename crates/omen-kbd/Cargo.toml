@@ -1,0 +1,18 @@
+[package]
+name = "omen-kbd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OMEN laptop RGB keyboard control over direct HID (Primax MCU, VID 0x0461)"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Devices_HumanInterfaceDevice",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }

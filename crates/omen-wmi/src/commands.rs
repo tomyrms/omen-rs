@@ -33,6 +33,10 @@ pub mod cmd {
     pub const SET_GPU_POWER: u32 = 0x22;
     pub const SET_CPU_POWER: u32 = 0x29;
     pub const GET_POWER_DATA: u32 = 0x2A;
+    pub const SET_ICC_MAX: u32 = 0x37;
+
+    // Legacy family (0x00001)
+    pub const GET_ADAPTER_STATUS: u32 = 0x0F;
 
     // Graphics mode (legacy)
     pub const GET_GPU_MODE: u32 = 0x52;

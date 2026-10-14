@@ -1,5 +1,15 @@
 # 03 — Clavier : protocole MCU et chaînes de contrôle
 
+> **Mise à jour 2026-10-14 (soir) — protocole résolu.** Ce modèle (« Cybug »,
+> PID `0x4E9A`) est piloté par le Hub via `DraxLightingBg.NbPerKeyRgbLightingControl`
+> → `McuGeneralHelper` (jeu de commandes **general**), pas par `KeyboardCommandHelper` V1
+> décrit plus bas. Différences : allumage `09 … 01` (pas `FF`), keymaps de **144 LED** avec
+> `[3]=0`, pas de « user-mode » `FC EA`, sauvegarde `0A 00 02 00 AC 53`. Réponses :
+> `EC AC` = accepté, **`EC FA` = refusé** — la luminosité `0x0C` est refusée par ce firmware
+> (0.3.21.0) quelle que soit la valeur. Couleurs et effets vérifiés côté MCU (accusés +
+> relecture `0x83`). Implémentation : `crates/omen-kbd`, détails dans
+> [IMPLEMENTATION.md](../IMPLEMENTATION.md#4-clavier-rgb-omen-kbd).
+
 **Matériel :** clavier OMEN 17-cm2xxx → MCU USB **VID `0x0461` / PID `0x4E9A`**,
 collection de contrôle **MI_02**.
 
