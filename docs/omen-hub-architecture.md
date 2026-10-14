@@ -38,6 +38,13 @@ HPAppHelperCap, HPDiagsCap, HPNetworkCap, HPSysInfoCap (HP HSA services)
 `IntelBenchmarkSDK.dll`, `RealtekNetworkingService.dll`, `RpcClient.Native.dll`,
 `SdkWrapperForNativeCode.dll`, `HomeInfoService.dll`, `HPAnalyticsNativeClientLib.dll`.
 
+RE note: `SdkWrapperForNativeCode.dll` is a C++/CLI **mixed-mode (managed)** PE -
+Ghidra (and REA's Windows native boundary) rejects managed targets; managed
+analysis of its IL via ilspycmd exposes mostly C++/CLI plumbing
+(`SdkWrapperLibrary::HPClientTuningProposal` = vendor tuning/OC proposals).
+The device/EC plumbing for the service is more directly reachable through the
+signed drivers (`hpomencustomcapdriver.sys`, `HpReadHWData.sys`).
+
 ## 2. Control interfaces (protocols)
 
 ### 2.1 HP BIOS WMI — `root\wmi` `hpqBIntM` (implemented in `omen-wmi`)
@@ -118,7 +125,7 @@ telemetry) — server-side features, out of scope by design.
 | Lighting (keyboard) | `AccessoryKeyboardLightingModuleV3`, `Background.KeyboardV3Bg`, `McuSDK2` | protocol extracted; static-color application pending USB capture |
 | Accessories | ~40 `Accessory*Module`/`Background.*` (headsets, mice, monitors, mousepads) | same MCU SDK; not started |
 | Profiles | `Features.Services.Profiles.*` | identified (storage + profile-changed events) |
-| Overclocking | `OmenCap`: Intel XTU / AMD Ryzen services, `*OverclockingModule` | native SDKs inside OmenCap |
+| Overclocking | `OmenCap`: Intel XTU / AMD Ryzen services, `*OverclockingModule`; app-side `Auto-OC/` (`OmenAutoOC.exe`, `OmenAutoOcHelper.exe`, `IntelOverclockingSDK.dll`, `XtuCommon.dll`, `HP_OMEN_Undervolting_Task.xml` scheduled task) | native SDKs inside OmenCap + managed helpers; AMD path uses `\\.\AMDRyzenMasterDriverV31` |
 | Network | `NetworkBoosterModule`, `RealtekNetworkingService.dll` | not started |
 | System optimizations | `SystemOptimizerModule/Bg` | not started |
 | Omen key / hotkeys | `Background.OmenKey`, `HotkeyWindow`, WMI events | identified |
