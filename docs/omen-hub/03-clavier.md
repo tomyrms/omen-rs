@@ -79,13 +79,20 @@ Source : `HP.Omen.Core.Common` → `McuKBLightingHSAClient.SetKeyColor(handle, r
 
 ## 5. État des tests (2026-10-14)
 
-- Écritures HID **directes** avec la séquence applicative exacte : toutes **acceptées**
-  (WriteFile 65 octets OK) mais **aucun changement visible** — cause racine en cours
-  d'investigation (capture USB au prochain reboot).
-- L'appli HP était également HS : le service `HPOmenCap` était **arrêté** ; il a été
-  redémarré (voir 07). Test de l'appli post-redémarrage en cours.
-- Prochain jalon : **capture USBPcap** (reboot requis pour attacher les filtres) pendant
-  un changement de couleur via l'appli → comparaison octet à octet avec nos trames.
+- **DÉCOUVERTE CLÉ : la luminosité (`0x0C`) était le verrou.** Après envoi de
+  `0x0C → 3` (LV_04) + la séquence complète, le **clavier s'allume** (visible
+  physiquement !). Le MCU était probablement à brightness 0 → tout restait noir
+  malgré des commandes acceptées.
+- Ordre validé : `Luminosité (>0) → Lighting ON (0x09) → user-mode (0x04/0) →
+  all-keys (0x04/1) → 9 keymaps (0x05/06/07 ×pages 0,1,2) → all-keys`.
+- Affichage constaté après la séquence : **blanc** (état par défaut/last-state).
+  La couleur exacte (prise en compte des keymaps ou pas) est en cours de
+  validation par cycles Rouge/Vert/Bleu/Magenta.
+- **L'appli HP elle-même était HS** car le service `HPOmenCap` était arrêté
+  (redémarré depuis — cf. [07](07-incidents-depannage.md)). Le clavier répond
+  désormais physiquement à nos commandes HID directes.
+- Prochaine étape décisive : **capture USBPcap** (reboot requis pour attacher les filtres)
+  pendant un changement de couleur via l'appli → comparaison octet à octet.
 
 ## 6. Outils locaux (repo `omen-rs`)
 
