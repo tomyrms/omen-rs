@@ -54,6 +54,7 @@ const NOT_GAMES: &[&str] = &[
     "riotclientux.exe",
     "riotclientuxrender.exe",
     "riotclientcrashhandler.exe",
+    "riot client.exe",
     "vgc.exe",
     "vgtray.exe",
     "leagueclient.exe",
@@ -256,7 +257,7 @@ pub fn detect_in(procs: &[RunningProcess], extra: &[String], ignored: &[String])
     // Unknown game running full screen in the foreground.
     if fullscreen_d3d() {
         if let Some(p) = fg.and_then(|pid| procs.iter().find(|p| p.pid == pid)) {
-            if !ignored.iter().any(|g| g.eq_ignore_ascii_case(&p.name)) {
+            if !ignored.iter().any(|g| g.eq_ignore_ascii_case(&p.name)) && !NOT_GAMES.contains(&p.name.as_str()) {
                 return Some(p.name.clone());
             }
         }

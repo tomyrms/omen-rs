@@ -171,10 +171,22 @@ impl Keyboard {
         }
         self.command(&protocol::lighting(true), "allumage")?;
         self.set_brightness_lenient(brightness);
-        for rep in protocol::static_keymaps(&r, &g, &b) {
-            self.command(&rep, "couleurs")?;
+        if self.upload_keymaps(&r, &g, &b).is_err() {
+            // Seen live: after an interrupted upload the MCU refuses key maps
+            // (status 02) until an effect resets its state machine.
+            sleep(STEP_DELAY);
+            let _ = self.transact(&protocol::effect(&EffectSettings::default()));
+            sleep(STEP_DELAY);
+            self.upload_keymaps(&r, &g, &b)?;
         }
         self.command(&protocol::store_to_flash(), "sauvegarde")?;
+        Ok(())
+    }
+
+    fn upload_keymaps(&mut self, r: &[u8; KEYMAP_LEN], g: &[u8; KEYMAP_LEN], b: &[u8; KEYMAP_LEN]) -> Result<()> {
+        for rep in protocol::static_keymaps(r, g, b) {
+            self.command(&rep, "couleurs")?;
+        }
         Ok(())
     }
 

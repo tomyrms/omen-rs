@@ -5,8 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use egui::{Align, Color32, CornerRadius, Layout, RichText, Sense, Stroke, Vec2};
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use omen_core::config::KeyboardLook;
+use omen_core::vendor::{self, HubStatus};
 use omen_core::{
-    autostart, Command, Config, Controller, KeyboardCommand, Level, Mode, Sensitivity, Snapshot,
+    autostart, Command, Config, Controller, KeyboardCommand, Level, Mode, OmenKeyAction, Sensitivity,
+    Snapshot,
 };
 use omen_kbd::{Direction, Effect, EffectSettings, Rgb, Theme};
 use omen_wmi::{FanCurve, FanCurvePoint, GpuMode};
@@ -33,6 +35,21 @@ const SWATCHES: &[(&str, Rgb)] = &[
     ("Rose", Rgb::new(255, 40, 140)),
     ("Blanc", Rgb::new(255, 255, 255)),
 ];
+
+/// OMEN Gaming Hub panel: state and the running uninstall/reinstall job.
+#[derive(Default)]
+struct HubPanel {
+    status: Option<HubStatus>,
+    busy: bool,
+    progress: String,
+    result: Option<(String, bool)>,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum HubConfirm {
+    Uninstall,
+    Reinstall,
+}
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -61,6 +78,10 @@ pub struct App {
     manual_rpm: u32,
     confirm_mux: Option<GpuMode>,
     quitting_hint_shown: bool,
+    hub: Arc<Mutex<HubPanel>>,
+    logo: egui::TextureHandle,
+    hub_disable_services: bool,
+    hub_confirm: Option<HubConfirm>,
     /// Hide the window after the first frame (start in the notification area).
     hide_on_start: bool,
 }
@@ -140,9 +161,67 @@ impl App {
             manual_rpm: 3500,
             confirm_mux: None,
             quitting_hint_shown: false,
+            hub: Arc::new(Mutex::new(HubPanel::default())),
+            logo: cc.egui_ctx.load_texture(
+                "logo",
+                egui::ColorImage::from_rgba_unmultiplied([256, 256], crate::LOGO_256),
+                egui::TextureOptions::LINEAR,
+            ),
+            hub_disable_services: true,
+            hub_confirm: None,
             hide_on_start: start_hidden,
             config,
         }
+    }
+
+    fn hub(&self) -> MutexGuard<'_, HubPanel> {
+        self.hub.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Runs a Hub job (or only a status refresh) off the UI thread.
+    fn hub_job(&self, ctx: &egui::Context, job: Option<HubConfirm>, disable_services: bool) {
+        {
+            let mut h = self.hub();
+            if h.busy {
+                return;
+            }
+            h.busy = true;
+            h.progress = if job.is_some() { "Préparation…".into() } else { "Lecture de l'état…".into() };
+            if job.is_some() {
+                h.result = None;
+            }
+        }
+        let hub = self.hub.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let set = |f: &dyn Fn(&mut HubPanel)| {
+                f(&mut hub.lock().unwrap_or_else(|e| e.into_inner()));
+                ctx.request_repaint();
+            };
+            let mut progress = |m: &str| {
+                let m = m.to_string();
+                set(&|h| h.progress = m.clone());
+            };
+            let result = match job {
+                Some(HubConfirm::Uninstall) => Some(vendor::uninstall(disable_services, &mut progress).map(|()| {
+                    "OMEN Gaming Hub est désinstallé. L'état d'avant est sauvegardé : « Réinstaller comme avant » le remettra tel quel.".to_string()
+                })),
+                Some(HubConfirm::Reinstall) => Some(vendor::reinstall(&mut progress)),
+                None => None,
+            };
+            let status = vendor::status();
+            set(&|h| {
+                h.status = Some(status.clone());
+                h.busy = false;
+                h.progress.clear();
+                if let Some(r) = &result {
+                    h.result = Some(match r {
+                        Ok(m) => (m.clone(), false),
+                        Err(e) => (format!("Échec : {e}"), true),
+                    });
+                }
+            });
+        });
     }
 
     fn cfg(&self) -> MutexGuard<'_, Config> {
@@ -167,6 +246,7 @@ impl App {
 
     fn header(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         ui.horizontal(|ui| {
+            ui.add(egui::Image::new(&self.logo).fit_to_exact_size(Vec2::splat(34.0)));
             ui.label(RichText::new("OMEN").size(26.0).strong().color(ACCENT));
             ui.label(RichText::new("Hub RS").size(26.0).strong());
             ui.add_space(12.0);
@@ -584,6 +664,29 @@ impl App {
             }
         });
 
+        section(ui, "Touche OMEN");
+        card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label("Action de la touche OMEN (au-dessus du clavier) tant que OMEN Hub RS tourne :");
+            let mut key = self.cfg().omen_key;
+            ui.horizontal_wrapped(|ui| {
+                for a in OmenKeyAction::ALL {
+                    ui.radio_value(&mut key, a, a.label());
+                }
+            });
+            if key != self.cfg().omen_key {
+                let mut cfg = self.cfg();
+                cfg.omen_key = key;
+                cfg.save();
+            }
+            let hub_installed = self.hub().status.as_ref().is_some_and(|h| h.version.is_some());
+            if hub_installed {
+                ui.label(RichText::new("OMEN Gaming Hub est encore installé : il ouvrira aussi sa propre fenêtre à chaque appui.").size(12.0).color(WARN));
+            }
+        });
+
+        self.hub_section(ui);
+
         section(ui, "Mode Auto");
         let mut auto = self.cfg().auto.clone();
         let before = auto.clone();
@@ -683,6 +786,106 @@ impl App {
                 let mut cfg = self.cfg();
                 cfg.gpu_sensors_on_battery = v;
                 cfg.save();
+            }
+        });
+    }
+
+    fn hub_section(&mut self, ui: &mut egui::Ui) {
+        section(ui, "OMEN Gaming Hub (application HP)");
+        let ctx = ui.ctx().clone();
+        if self.hub().status.is_none() && !self.hub().busy {
+            self.hub_job(&ctx, None, false);
+        }
+        let (status, busy, progress, result) = {
+            let h = self.hub();
+            (h.status.clone(), h.busy, h.progress.clone(), h.result.clone())
+        };
+        card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label("OMEN Hub RS remplace ses réglages : vous pouvez désinstaller l'application HP et ses services, puis tout remettre comme avant d'un clic. Les pilotes HP ne sont jamais touchés (l'interface BIOS en a besoin).");
+            match &status {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Lecture de l'état…");
+                    });
+                }
+                Some(st) => {
+                    let (txt, color) = match &st.version {
+                        Some(v) => (format!("installé (version {v})"), WARN),
+                        None => ("non installé".to_string(), OK),
+                    };
+                    ui.label(RichText::new(format!("Application : {txt}")).strong().color(color));
+                    for sv in &st.services {
+                        ui.label(format!(
+                            "• {} : {}{}",
+                            sv.display,
+                            sv.start_label(),
+                            if sv.running { ", en cours" } else { ", arrêté" }
+                        ));
+                    }
+                    for t in &st.tasks {
+                        ui.label(format!(
+                            "• Tâche HP « {} » : {}{}",
+                            t.label(),
+                            if t.enabled { "activée" } else { "désactivée" },
+                            if t.running { ", en cours" } else { "" }
+                        ));
+                    }
+                    if st.has_backup {
+                        ui.label(RichText::new("État d'origine sauvegardé : « Réinstaller comme avant » le restaurera.").size(12.0).color(MUTED));
+                    }
+                }
+            }
+            if !omen_core::controller::is_elevated() {
+                ui.colored_label(WARN, "Les droits administrateur sont nécessaires pour ces actions.");
+            }
+            ui.add_space(4.0);
+            ui.add_enabled_ui(!busy && status.is_some(), |ui| {
+                let st = status.clone().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    if st.anything_left()
+                        && ui
+                            .add(egui::Button::new(RichText::new("Désinstaller OMEN Gaming Hub").strong()).fill(ACCENT_DIM))
+                            .clicked()
+                    {
+                        self.hub_confirm = Some(HubConfirm::Uninstall);
+                    }
+                    if (st.version.is_none() || st.has_backup) && ui.button("Réinstaller comme avant").clicked() {
+                        self.hub_confirm = Some(HubConfirm::Reinstall);
+                    }
+                    if ui.button("Actualiser").clicked() {
+                        self.hub_job(&ctx, None, false);
+                    }
+                });
+                ui.checkbox(
+                    &mut self.hub_disable_services,
+                    "Désactiver aussi ses services et tâches en arrière-plan (HP Omen, System Info, Network, App Helper, overlay, surveillance)",
+                );
+            });
+            if let Some(c) = self.hub_confirm {
+                let text = match c {
+                    HubConfirm::Uninstall => "Désinstaller OMEN Gaming Hub ? L'état actuel est sauvegardé avant.",
+                    HubConfirm::Reinstall => "Rétablir les services et réinstaller OMEN Gaming Hub depuis le Microsoft Store ?",
+                };
+                ui.horizontal(|ui| {
+                    ui.colored_label(WARN, text);
+                    if ui.button("Confirmer").clicked() {
+                        self.hub_confirm = None;
+                        self.hub_job(&ctx, Some(c), self.hub_disable_services);
+                    }
+                    if ui.button("Annuler").clicked() {
+                        self.hub_confirm = None;
+                    }
+                });
+            }
+            if busy {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(&progress);
+                });
+            } else if let Some((m, err)) = &result {
+                ui.colored_label(if *err { ERR } else { OK }, m);
             }
         });
     }
@@ -898,7 +1101,7 @@ impl eframe::App for App {
         if self.hide_on_start {
             self.hide_on_start = false;
             if self.tray.is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                crate::hide_main_window(&ctx);
             }
         }
 
@@ -907,7 +1110,7 @@ impl eframe::App for App {
             let to_tray = self.cfg().close_to_tray && self.tray.is_some();
             if to_tray {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                crate::hide_main_window(&ctx);
                 if !self.quitting_hint_shown {
                     self.quitting_hint_shown = true;
                     crate::log_line("ui: hidden to tray");

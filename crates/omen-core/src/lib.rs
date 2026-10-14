@@ -8,7 +8,8 @@ pub mod controller;
 pub mod games;
 pub mod mode;
 pub mod sensors;
+pub mod vendor;
 
-pub use config::{log_line, AutoSettings, Config, KeyboardLook, Sensitivity};
+pub use config::{log_line, AutoSettings, Config, KeyboardLook, OmenKeyAction, Sensitivity};
 pub use controller::{Command, Controller, HistoryPoint, KeyboardCommand, Snapshot};
 pub use mode::{Level, Mode};

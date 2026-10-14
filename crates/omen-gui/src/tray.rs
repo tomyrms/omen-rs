@@ -6,7 +6,7 @@ use omen_core::{Command, Config, Controller, Mode};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-use crate::{icon_rgba, APP_TITLE};
+use crate::{APP_TITLE, LOGO_64};
 
 pub struct Tray {
     _icon: TrayIcon,
@@ -36,7 +36,7 @@ impl Tray {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&quit);
 
-        let icon = tray_icon::Icon::from_rgba(icon_rgba(32), 32, 32).ok()?;
+        let icon = tray_icon::Icon::from_rgba(LOGO_64.to_vec(), 64, 64).ok()?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip(APP_TITLE)

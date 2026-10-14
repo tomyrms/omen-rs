@@ -22,10 +22,12 @@ fn wide(s: &str) -> Vec<u16> {
 /// show its window). Keep the returned guard alive for the process lifetime.
 pub fn acquire() -> Option<Guard> {
     unsafe {
-        let name = wide(MUTEX_NAME);
+        // OMENRS_INSTANCE=<suffix> runs a separate instance (measurements, tests).
+        let suffix = std::env::var("OMENRS_INSTANCE").unwrap_or_default();
+        let name = wide(&format!("{MUTEX_NAME}{suffix}"));
         let mutex = CreateMutexW(None, false, PCWSTR(name.as_ptr())).ok()?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            let ev = wide(EVENT_NAME);
+            let ev = wide(&format!("{EVENT_NAME}{suffix}"));
             if let Ok(h) = OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(ev.as_ptr())) {
                 let _ = SetEvent(h);
             }
@@ -41,8 +43,9 @@ pub struct Guard {
 
 /// Calls `on_show` every time another instance asks for the window.
 pub fn listen(on_show: impl Fn() + Send + 'static) {
+    let suffix = std::env::var("OMENRS_INSTANCE").unwrap_or_default();
     std::thread::spawn(move || unsafe {
-        let ev = wide(EVENT_NAME);
+        let ev = wide(&format!("{EVENT_NAME}{suffix}"));
         let Ok(h) = CreateEventW(None, false, false, PCWSTR(ev.as_ptr())) else {
             return;
         };

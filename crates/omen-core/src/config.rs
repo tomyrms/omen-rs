@@ -60,6 +60,33 @@ impl Default for AutoSettings {
     }
 }
 
+/// What the OMEN key (above the keyboard) does while the app runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum OmenKeyAction {
+    /// Show the OMEN Hub RS window.
+    #[default]
+    OpenApp,
+    /// Switch to the next mode (Auto → Silencieux → … → Max → Auto).
+    NextMode,
+    /// Max fans on/off (back to the previous mode).
+    ToggleMax,
+    Nothing,
+}
+
+impl OmenKeyAction {
+    pub const ALL: [OmenKeyAction; 4] =
+        [OmenKeyAction::OpenApp, OmenKeyAction::NextMode, OmenKeyAction::ToggleMax, OmenKeyAction::Nothing];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OmenKeyAction::OpenApp => "Ouvrir OMEN Hub RS",
+            OmenKeyAction::NextMode => "Passer au mode suivant",
+            OmenKeyAction::ToggleMax => "Ventilateurs Max / retour",
+            OmenKeyAction::Nothing => "Ne rien faire",
+        }
+    }
+}
+
 /// What the keyboard should show; reapplied at startup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum KeyboardLook {
@@ -93,6 +120,7 @@ pub struct Config {
     /// Read the NVIDIA GPU sensors while on battery (keeps the GPU awake).
     pub gpu_sensors_on_battery: bool,
     pub custom_colors: Vec<Rgb>,
+    pub omen_key: OmenKeyAction,
 }
 
 impl Default for Config {
@@ -107,6 +135,7 @@ impl Default for Config {
             close_to_tray: true,
             gpu_sensors_on_battery: false,
             custom_colors: Vec::new(),
+            omen_key: OmenKeyAction::default(),
         }
     }
 }

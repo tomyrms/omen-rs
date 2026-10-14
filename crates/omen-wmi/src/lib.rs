@@ -19,6 +19,9 @@ mod types;
 pub use commands::*;
 pub use types::*;
 
+mod events;
+pub use events::{BiosEvent, BiosEvents};
+
 use std::mem::ManuallyDrop;
 use std::ptr;
 
@@ -243,6 +246,63 @@ fn variant_as_bytes(v: &VARIANT) -> Vec<u8> {
     }
 }
 
+/// Connects to `root\WMI` with the proxy security HP's provider needs.
+pub(crate) fn connect_services() -> WinResult<IWbemServices> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        // Default security; RPC_E_TOO_LATE is fine when already initialized.
+        let _ = CoInitializeSecurity(
+            None,
+            -1,
+            None,
+            None,
+            RPC_C_AUTHN_LEVEL_DEFAULT,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            None,
+            EOAC_NONE,
+            None,
+        );
+
+        let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| step("CoCreateInstance", e))?;
+
+        let services: IWbemServices = locator
+            .ConnectServer(
+                &BSTR::from(WMI_NAMESPACE),
+                &BSTR::new(),
+                &BSTR::new(),
+                &BSTR::new(),
+                0,
+                &BSTR::new(),
+                None,
+            )
+            .map_err(|e| step("ConnectServer", e))?;
+
+        // Force the proxy authentication/impersonation levels explicitly:
+        // in GUI processes the process-wide COM security often ends up at
+        // identify level (set first by OLE/winit), which makes every WMI
+        // method call fail while the connection itself still succeeds.
+        {
+            use windows::Win32::System::Com::{CoSetProxyBlanket, RPC_C_AUTHN_LEVEL_CALL};
+            use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
+            let svc: IUnknown = services.clone().into();
+            let _ = CoSetProxyBlanket(
+                &svc,
+                RPC_C_AUTHN_WINNT,
+                RPC_C_AUTHZ_NONE,
+                None,
+                RPC_C_AUTHN_LEVEL_CALL,
+                RPC_C_IMP_LEVEL_IMPERSONATE,
+                None,
+                EOAC_NONE,
+            );
+        }
+
+        Ok(services)
+    }
+}
+
 /// Connected client for the HP BIOS WMI interface.
 pub struct BiosClient {
     services: IWbemServices,
@@ -255,54 +315,7 @@ impl BiosClient {
     /// Requires an elevated process token on OMEN hardware.
     pub fn connect() -> WinResult<Self> {
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            // Default security; RPC_E_TOO_LATE is fine when already initialized.
-            let _ = CoInitializeSecurity(
-                None,
-                -1,
-                None,
-                None,
-                RPC_C_AUTHN_LEVEL_DEFAULT,
-                RPC_C_IMP_LEVEL_IMPERSONATE,
-                None,
-                EOAC_NONE,
-                None,
-            );
-
-            let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| step("CoCreateInstance", e))?;
-
-            let services: IWbemServices = locator
-                .ConnectServer(
-                    &BSTR::from(WMI_NAMESPACE),
-                    &BSTR::new(),
-                    &BSTR::new(),
-                    &BSTR::new(),
-                    0,
-                    &BSTR::new(),
-                    None,
-                )
-                .map_err(|e| step("ConnectServer", e))?;
-
-            // Force the proxy authentication/impersonation levels explicitly:
-            // in GUI processes the process-wide COM security often ends up at
-            // identify level (set first by OLE/winit), which makes every WMI
-            // method call fail while the connection itself still succeeds.
-            {
-                use windows::Win32::System::Com::{CoSetProxyBlanket, RPC_C_AUTHN_LEVEL_CALL};
-                use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
-                let svc: IUnknown = services.clone().into();
-                let _ = CoSetProxyBlanket(
-                    &svc,
-                    RPC_C_AUTHN_WINNT,
-                    RPC_C_AUTHZ_NONE,
-                    None,
-                    RPC_C_AUTHN_LEVEL_CALL,
-                    RPC_C_IMP_LEVEL_IMPERSONATE,
-                    None,
-                    EOAC_NONE,
-                );
-            }
+            let services = connect_services()?;
 
             let mut method_class: Option<IWbemClassObject> = None;
             services

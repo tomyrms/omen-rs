@@ -101,7 +101,7 @@ Réponse du MCU à chaque commande : `[1]`,`[2]` en écho ; `[5] [6]` = `EC AC` 
 |---|---|---|
 | Infos | `80 01 00 00` → firmware `[5..8]`, type `[9]`, langue, profil, effet `[12]`, luminosité `[13]` | ✓ firmware 0.3.21.0 |
 | Allumer / éteindre | `09 00 01 00 01|00` | ✓ `EC AC` |
-| Couleurs par touche | `05/06/07` (R/G/B) × pages 0,1,2 ; `[3]=0` ; 144 LED (60+60+24) | ✓ 9 × `EC AC`, état relu = mode statique `0x0F` |
+| Couleurs par touche | `05/06/07` (R/G/B) × pages 0,1,2 ; `[3]=0` ; 180 LED (3 × 60). 144 laissait les flèches et quelques touches éteintes : l'éditeur par touche du Hub pour ce clavier (Starmade/Cybug) utilise des index au-delà de 160 | ✓ 9 × `EC AC`, état relu = mode statique `0x0F` |
 | Effet | `03 00 24 00` + effet, mode, nb couleurs, vitesse, luminosité, direction, onde, pluie, …, RGB×6 à partir de `[29]` | ✓ relecture `0x83` : respiration `02`, vague `0A` |
 | Lecture effet | `83 00 00 00` | ✓ |
 | Sauvegarde flash | `0A 00 02 00 AC 53` | envoyé, pas de réponse (normal ?) |
@@ -131,6 +131,22 @@ Jamais envoyé : `10 09 …` (passage en mode mise à jour du firmware).
   (interroger le GPU l'empêche de dormir).
 - La température exacte des cœurs CPU demande un accès MSR (pilote noyau) : **hors
   périmètre**.
+
+## 5 bis. Touche OMEN et OMEN Gaming Hub
+
+- **Touche OMEN** : le BIOS émet l'événement WMI `root\WMI hpqBEvnt` avec `EventID = 29`,
+  `EventData = 8613` (le Hub ne fait qu'ouvrir `omencommandcenter:` sur cet événement).
+  L'application s'y abonne (`omen-wmi::BiosEvents`, `ExecNotificationQuery`, fonctionne sans
+  droits admin) et exécute l'action choisie dans Réglages. Test : `cargo run -p omen-wmi
+  --example events 30` puis appuyer sur la touche.
+- **OMEN Gaming Hub** (`omen-core::vendor`) : paquet Store `AD2F1837.OMENCommandCenter`
+  (ID Store `9NQDW009T0T5`). Désinstallation = `Remove-AppxPackage` ; option : arrêt et
+  désactivation de `HPOmenCap`, `HPSysInfoCap`, `HPNetworkCap`, `HPAppHelperCap` et des
+  tâches planifiées HP `OmenInstallMonitor*` et `OmenOverlay*` (auteur HP Inc.). L'état
+  d'origine (type de démarrage, en cours ou non) est sauvegardé dans
+  `%APPDATA%\omen-rs\hub-backup.json` avant toute modification ; « Réinstaller comme avant »
+  rétablit les services puis installe le paquet par `winget` (repli : page du Store). Les
+  pilotes HP ne sont jamais touchés.
 
 ## 6. Démarrage automatique
 

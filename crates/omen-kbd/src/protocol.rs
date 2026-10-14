@@ -12,8 +12,11 @@
 use serde::{Deserialize, Serialize};
 
 pub const REPORT_LEN: usize = 65;
-/// Size of a per-key color map (one byte per LED index).
-pub const KEYMAP_LEN: usize = 144;
+/// Size of a per-key color map (one byte per LED index): three full pages.
+/// The Hub's background service sends 144, but its per-key editor for this
+/// keyboard family (Starmade/Cybug) uses indices past 160; with only 144 the
+/// arrow keys and a few others stayed dark.
+pub const KEYMAP_LEN: usize = 180;
 const PAGE_LEN: usize = 60;
 
 pub type Report = [u8; REPORT_LEN];
@@ -58,7 +61,7 @@ pub fn brightness(percent: u8) -> Report {
 }
 
 /// `0x05/0x06/0x07` x 3 pages: one color channel per command, 60 LEDs per
-/// page (the last page carries the remaining 24 of the 144 LEDs).
+/// page, 180 LEDs.
 pub fn static_keymaps(r: &[u8; KEYMAP_LEN], g: &[u8; KEYMAP_LEN], b: &[u8; KEYMAP_LEN]) -> Vec<Report> {
     let mut out = Vec::with_capacity(9);
     for (command, map) in [(cmd::SET_KEYS_R, r), (cmd::SET_KEYS_G, g), (cmd::SET_KEYS_B, b)] {
@@ -429,10 +432,9 @@ mod tests {
         assert_eq!(&reps[0][..5], &[0, 0x05, 0, 0, 0]);
         assert_eq!(reps[0][5], 0xFF);
         assert_eq!(reps[0][64], 0xFF);
-        // Third page: 24 LEDs then padding.
+        // Third page: LEDs 120..179.
         assert_eq!(reps[2][2], 2);
-        assert_eq!(reps[2][5 + 23], 0xFF);
-        assert_eq!(reps[2][5 + 24], 0);
+        assert_eq!(reps[2][5 + 59], 0xFF);
         assert_eq!(reps[3][1], 0x06);
     }
 

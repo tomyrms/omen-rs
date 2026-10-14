@@ -1,5 +1,7 @@
 # OMEN Hub RS
 
+<img src="assets/omen-hub-rs.png" width="96" align="right">
+
 Remplaçant simple et open-source des réglages de l'**OMEN Gaming Hub** pour les PC
 portables HP OMEN : modes de performance avec **mode Auto**, ventilateurs, **clavier RGB**,
 lancement au démarrage. Écrit en Rust, développé et testé sur un OMEN 17-cm2xxx
@@ -16,6 +18,8 @@ lancement au démarrage. Écrit en Rust, développé et testé sur un OMEN 17-cm
 | **Ventilateurs** | Vitesses en tr/min, mode Max, courbe personnalisée, vitesse fixe. |
 | **Clavier RGB** | Couleur unie (9 couleurs + nuancier), 9 effets animés (vague, respiration, cycle…), thèmes ou vos couleurs, extinction, éclairage d'usine. |
 | **Surveillance** | Charge CPU/GPU, températures (GPU NVIDIA, zone thermique, capteurs du BIOS), vitesses ventilateurs, alimentation, historique 10 min. |
+| **Touche OMEN** | Au choix : ouvrir l'appli, passer au mode suivant, Max / retour, ou rien. |
+| **OMEN Gaming Hub** | Désinstaller l'appli HP (et ses services et tâches planifiées) depuis Réglages, avec sauvegarde de l'état ; « Réinstaller comme avant » remet tout. |
 | **Démarrage** | Option « Lancer au démarrage de Windows » (sans fenêtre UAC à chaque démarrage), démarrage réduit près de l'horloge, la croix garde l'appli en arrière-plan. |
 
 ## Installer

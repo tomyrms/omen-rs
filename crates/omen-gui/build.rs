@@ -9,6 +9,15 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
+    // Application icon (Explorer, shortcuts, taskbar) from assets/omen-hub-rs.ico.
+    println!("cargo:rerun-if-changed=omen-hub.rc");
+    println!("cargo:rerun-if-changed=../../assets/omen-hub-rs.ico");
+    if target_os == "windows" {
+        embed_resource::compile("omen-hub.rc", embed_resource::NONE)
+            .manifest_optional()
+            .expect("compiling the icon resource");
+    }
+
     if target_os == "windows" && target_env == "msvc" {
         println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
         println!(
