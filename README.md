@@ -33,8 +33,22 @@ vendor application and OmenMon.
 ```
 crates/omen-wmi   Protocol client: hpqBIntM / hpqBIOSInt<n> over COM (windows crate)
 crates/omen-cli   "omen" CLI: info, fans, temp, power, gpu-power, and setters
-docs/             Command table with provenance (IL evidence / OmenMon / live test)
+crates/omen-gui   "omen-hub" GUI: dashboard, fan curve editor, history, tray
+docs/             Full RE documentation (see below)
 ```
+
+## Documentation
+
+- `docs/bios-wmi-commands.md` — BIOS WMI command table + raw-COM quirks
+- `docs/keyboard-lighting-re.md` — Primax keyboard MCU protocol over HID
+- `docs/omen-hub-architecture.md` — full A-to-Z map of the OMEN Gaming Hub
+  (packages, drivers, services, all control interfaces, subsystem inventory)
+
+Native analysis runs through REA's Ghidra provider (Ghidra 12.1.4 + JDK 21
+installed; set `GHIDRA_INSTALL_DIR` and `JAVA_HOME`, then
+`REA_ANALYSIS_PROVIDER=ghidra`) against the native pieces: `OmenCap` service
+DLLs, the HP drivers (`hpomencustomcapdriver.sys`, `HpReadHWData.sys`),
+`EffectEngine.dll` and other app helpers.
 
 ## Build
 
