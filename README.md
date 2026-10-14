@@ -83,6 +83,8 @@ Or run the full test script: `run-omen-tests.ps1` (self-elevate via
 - [ ] CPU/GPU temperatures: `0x23` does not track CPU load on this model (IR/ambient sensor); needs the EC or the HP driver path (`HPReadHWData.sys`)
 - [ ] PL1/PL2 writes: accepted by `0x29` (code 0) but not reflected in the `0x2A` readback; `0x37` rejected (code 6). Needs MSR (`0x610`) verification
 - [ ] Fan table write (`0x32`, desktop-only per vendor docs) and per-key RGB via HID (separate RE)
+  - Keyboard lighting RE (Primax MCU, V1 command set, GetDeviceInfo round-trip) documented in
+    `docs/keyboard-lighting-re.md`; final command sequence pending USB capture
 - [ ] Performance-mode sync with the Hub background service (named pipes)
 - [ ] GPU mode write (`0x52`, reboot required) — implemented in the CLI, gated behind `--yes`
 - [ ] Long-running ownership fix for SAFEARRAY lifetimes in `omen-wmi`
