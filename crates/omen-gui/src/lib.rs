@@ -24,7 +24,7 @@ fn log_path() -> Option<PathBuf> {
     Some(PathBuf::from(base).join("omen-rs").join("omen-hub.log"))
 }
 
-fn log_line(msg: &str) {
+pub fn log_line(msg: &str) {
     if let Some(path) = log_path() {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -47,6 +47,30 @@ fn log_line(msg: &str) {
 /// panicking (a worker panic must not take the whole GUI down).
 fn lock<'a>(state: &'a Arc<Mutex<UiState>>) -> MutexGuard<'a, UiState> {
     state.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Extracts the value of a BIOS read, recording the first failure so the UI
+/// can surface it instead of silently showing nothing.
+fn take<T>(
+    r: windows::core::Result<(i32, T)>,
+    what: &str,
+    err: &mut Option<String>,
+) -> Option<T> {
+    match r {
+        Ok((0, v)) => Some(v),
+        Ok((c, _)) => {
+            if err.is_none() {
+                *err = Some(format!("{what}: code BIOS {c}"));
+            }
+            None
+        }
+        Err(e) => {
+            if err.is_none() {
+                *err = Some(format!("{what}: {e}"));
+            }
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +227,7 @@ fn spawn_worker(rx_cmd: Receiver<Cmd>, state: Arc<Mutex<UiState>>) {
         log_line("worker: first sample done");
 
         let mut last_sample = Instant::now();
+        let mut heartbeat = Instant::now();
 
         loop {
             match rx_cmd.recv_timeout(Duration::from_millis(400)) {
@@ -215,6 +240,16 @@ fn spawn_worker(rx_cmd: Receiver<Cmd>, state: Arc<Mutex<UiState>>) {
                 sample(&client, &state, start);
                 apply_curve(&client, &state);
                 last_sample = Instant::now();
+            }
+
+            if heartbeat.elapsed() >= Duration::from_secs(30) {
+                let st = lock(&state);
+                log_line(&format!(
+                    "worker: heartbeat temp={:?} fan_cpu={:?} connected={} error={:?}",
+                    st.snapshot.temp_c, st.snapshot.fan_cpu, st.connected, st.snapshot.error
+                ));
+                drop(st);
+                heartbeat = Instant::now();
             }
         }
     });
@@ -235,26 +270,12 @@ fn check(state: &Arc<Mutex<UiState>>, code: i32, what: &str) -> bool {
 
 fn sample(client: &BiosClient, state: &Arc<Mutex<UiState>>, start: Instant) {
     // Collect without the lock, then store: never hold the mutex across WMI calls.
-    let temp = client
-        .get_temperature()
-        .ok()
-        .and_then(|(c, v)| (c == 0).then_some(v));
-    let fan = client
-        .get_fan_level()
-        .ok()
-        .and_then(|(c, v)| (c == 0).then_some(v));
-    let max_fan = client
-        .get_max_fan()
-        .ok()
-        .and_then(|(c, v)| (c == 0).then_some(v));
-    let throttling = client
-        .get_throttling()
-        .ok()
-        .and_then(|(c, v)| (c == 0).then(|| format!("{v:?}")));
-    let power = client
-        .get_power_data()
-        .ok()
-        .and_then(|(c, v)| (c == 0).then_some(v));
+    let mut err: Option<String> = None;
+    let temp = take(client.get_temperature(), "temperature", &mut err);
+    let fan = take(client.get_fan_level(), "fan level", &mut err);
+    let max_fan = take(client.get_max_fan(), "max fan", &mut err);
+    let throttling = take(client.get_throttling(), "throttling", &mut err).map(|v| format!("{v:?}"));
+    let power = take(client.get_power_data(), "power data", &mut err);
 
     let mut st = lock(state);
     if let Some(v) = temp {
@@ -275,6 +296,7 @@ fn sample(client: &BiosClient, state: &Arc<Mutex<UiState>>, start: Instant) {
     if let Some(v) = power {
         st.snapshot.power_raw = v;
     }
+    st.snapshot.error = err;
     st.last_sample_at = Some(Instant::now());
 
     let t = start.elapsed().as_secs_f64();
@@ -522,6 +544,7 @@ struct App {
     tx: Sender<Cmd>,
     tray: Option<Tray>,
     curve_edit: FanCurve,
+    last_ui_log: Option<Instant>,
 }
 
 impl App {
@@ -558,6 +581,7 @@ impl App {
             tx,
             tray: None,
             curve_edit,
+            last_ui_log: None,
         }
     }
 
@@ -604,6 +628,10 @@ impl App {
     fn dashboard(&mut self, ui: &mut egui::Ui) {
         let st = lock(&self.state);
         let snap = st.snapshot.clone();
+
+        if let Some(e) = &snap.error {
+            ui.colored_label(egui::Color32::RED, format!("⚠ {e}"));
+        }
 
         ui.horizontal(|ui| {
             ui.heading(format!(
@@ -961,72 +989,84 @@ impl eframe::App for App {
             (st.connected, st.last_sample_at.map(|t| t.elapsed().as_secs()))
         };
         let stale = connected && last_sample_secs.map(|s| s > 8).unwrap_or(false);
-        if stale {
-            egui::Panel::top("stale").show(ui, |ui| {
-                ui.colored_label(
-                    egui::Color32::from_rgb(220, 140, 40),
-                    format!(
-                        "⚠ Le worker ne répond plus depuis {} s (log: %APPDATA%\\omen-rs\\omen-hub.log)",
-                        last_sample_secs.unwrap_or(0)
-                    ),
-                );
-            });
-        } else if !connected && connect_error.is_none() {
-            egui::Panel::top("connecting").show(ui, |ui| {
-                ui.label("Connexion WMI en cours…");
-            });
-        }
 
+        // Banners are rendered as plain widgets inside the central panel: the
+        // top/bottom `Panel` API did not lay out reliably under `App::ui`.
+        let mut banners: Vec<(egui::Color32, String)> = Vec::new();
         if !elevated {
-            egui::Panel::top("warn").show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 140, 40),
-                        "⚠ Non élevé : les contrôles WMI nécessitent un jeton administrateur.",
-                    );
-                    if ui.button("Relancer en admin").clicked() {
-                        #[cfg(windows)]
-                        relaunch_elevated();
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
-            });
+            banners.push((
+                egui::Color32::from_rgb(220, 140, 40),
+                "⚠ Non élevé : les contrôles WMI nécessitent un jeton administrateur.".to_string(),
+            ));
         }
-        if let Some(err) = connect_error {
-            egui::Panel::top("err").show(ui, |ui| {
-                ui.colored_label(egui::Color32::RED, err);
-            });
+        if let Some(err) = &connect_error {
+            banners.push((egui::Color32::RED, err.clone()));
+        }
+        if stale {
+            banners.push((
+                egui::Color32::from_rgb(220, 140, 40),
+                format!(
+                    "⚠ Le worker ne répond plus depuis {} s (log: %APPDATA%\\omen-rs\\omen-hub.log)",
+                    last_sample_secs.unwrap_or(0)
+                ),
+            ));
+        } else if !connected && connect_error.is_none() {
+            banners.push((egui::Color32::GRAY, "Connexion WMI en cours…".to_string()));
         }
 
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(if status.is_empty() {
-                    "Prêt".to_string()
-                } else {
-                    status
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (t, cpu, gpu) = {
-                        let st = lock(&self.state);
-                        (
-                            st.snapshot.temp_c,
-                            st.snapshot.fan_cpu_percent,
-                            st.snapshot.fan_gpu_percent,
-                        )
-                    };
-                    ui.label(format!(
-                        "{} °C | fan {} % / {} %",
-                        t.map(|v| v.to_string()).unwrap_or("--".into()),
-                        cpu.unwrap_or(0),
-                        gpu.unwrap_or(0)
-                    ));
-                });
-            });
-        });
+        // UI beacon: proves the render thread is alive and what it sees.
+        if self
+            .last_ui_log
+            .map(|t| t.elapsed().as_secs() >= 15)
+            .unwrap_or(true)
+        {
+            let st = lock(&self.state);
+            log_line(&format!(
+                "ui: connected={} elevated={} temp={:?} fan=({:?},{:?}) system={} gpu_power={} banners={}",
+                st.connected,
+                st.elevated,
+                st.snapshot.temp_c,
+                st.snapshot.fan_cpu,
+                st.snapshot.fan_gpu,
+                st.snapshot.system.is_some(),
+                st.snapshot.gpu_power.is_some(),
+                banners.len()
+            ));
+            drop(st);
+            self.last_ui_log = Some(Instant::now());
+        }
+
+        let figures = {
+            let st = lock(&self.state);
+            (
+                st.snapshot.temp_c,
+                st.snapshot.fan_cpu_percent,
+                st.snapshot.fan_gpu_percent,
+            )
+        };
 
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
+                for (color, text) in &banners {
+                    ui.colored_label(*color, text);
+                }
+                if !elevated && ui.button("Relancer en admin").clicked() {
+                    #[cfg(windows)]
+                    relaunch_elevated();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 ui.heading(APP_TITLE);
+                ui.label(if status.is_empty() {
+                    "Prêt".to_string()
+                } else {
+                    status.clone()
+                });
+                ui.label(format!(
+                    "{} °C | fan {} % / {} %",
+                    figures.0.map(|v| v.to_string()).unwrap_or("--".into()),
+                    figures.1.unwrap_or(0),
+                    figures.2.unwrap_or(0)
+                ));
                 ui.separator();
                 self.dashboard(ui);
                 ui.separator();
@@ -1053,6 +1093,28 @@ pub fn run() -> Result<(), eframe::Error> {
         log_line(&format!("PANIC: {info}"));
     }));
     log_line("omen-hub: starting");
+
+    // Set the process COM security *before* winit/OLE can install its own:
+    // the WMI provider requires at least impersonate level, and whatever runs
+    // first wins for the whole process (later calls get RPC_E_TOO_LATE).
+    unsafe {
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoInitializeSecurity, COINIT_APARTMENTTHREADED, EOAC_NONE,
+            RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE,
+        };
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let _ = CoInitializeSecurity(
+            None,
+            -1,
+            None,
+            None,
+            RPC_C_AUTHN_LEVEL_DEFAULT,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            None,
+            EOAC_NONE,
+            None,
+        );
+    }
 
     let size = 32u32;
     let icon = egui::IconData {

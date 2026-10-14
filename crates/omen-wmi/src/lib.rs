@@ -265,6 +265,26 @@ impl BiosClient {
                 )
                 .map_err(|e| step("ConnectServer", e))?;
 
+            // Force the proxy authentication/impersonation levels explicitly:
+            // in GUI processes the process-wide COM security often ends up at
+            // identify level (set first by OLE/winit), which makes every WMI
+            // method call fail while the connection itself still succeeds.
+            {
+                use windows::Win32::System::Com::{CoSetProxyBlanket, RPC_C_AUTHN_LEVEL_CALL};
+                use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
+                let svc: IUnknown = services.clone().into();
+                let _ = CoSetProxyBlanket(
+                    &svc,
+                    RPC_C_AUTHN_WINNT,
+                    RPC_C_AUTHZ_NONE,
+                    None,
+                    RPC_C_AUTHN_LEVEL_CALL,
+                    RPC_C_IMP_LEVEL_IMPERSONATE,
+                    None,
+                    EOAC_NONE,
+                );
+            }
+
             let mut method_class: Option<IWbemClassObject> = None;
             services
                 .GetObject(

@@ -51,6 +51,16 @@ directly. Three quirks matter:
 3. **Embedded instance parameter**: the method's `InData` parameter is
    `CIM_OBJECT` (13); put the spawned `hpqBDataIn` instance as a
    `VT_UNKNOWN` VARIANT with type 13.
+4. **GUI processes need `CoSetProxyBlanket`**: OLE/winit initializes the
+   process COM security first (identify-level impersonation), which every
+   later `CoInitializeSecurity` call cannot change (`RPC_E_TOO_LATE`).
+   The connection and class lookups still succeed, but every
+   `ExecMethod` silently fails. Fix, applied in `BiosClient::connect()`:
+   `CoSetProxyBlanket(services, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL,
+   RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE)`,
+   plus an early `CoInitializeSecurity(DEFAULT, IMPERSONATE)` in the GUI's
+   `main` before eframe starts. Never swallow the per-call return codes in
+   long-running consumers - surface them.
 
 `Sign` and `hpqBData` are `uint8[]` (`VT_ARRAY|VT_UI1` with type `0x2011`).
 Output: `OutData` is a `VT_UNKNOWN` embedded instance carrying `rwReturnCode`
